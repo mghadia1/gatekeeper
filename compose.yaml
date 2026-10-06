@@ -1,5 +1,6 @@
-# The gateway in front of two test backends ("users" and "orders", both the
-# echo service). Redis arrives in Milestone 3, Prometheus in Milestone 5.
+# The gateway in front of test backends (all the echo service): "users" with
+# two instances, and "orders". Redis arrives in Milestone 3, Prometheus in
+# Milestone 5.
 x-echo: &echo
   build:
     context: .
@@ -20,16 +21,23 @@ services:
     volumes:
       - ./config/gatekeeper.json:/etc/gatekeeper/config.json:ro
     depends_on:
-      users:
+      users-1:
+        condition: service_healthy
+      users-2:
         condition: service_healthy
       orders:
         condition: service_healthy
     restart: unless-stopped
 
-  users:
+  users-1:
     <<: *echo
     environment:
-      ECHO_NAME: users
+      ECHO_NAME: users-1
+
+  users-2:
+    <<: *echo
+    environment:
+      ECHO_NAME: users-2
 
   orders:
     <<: *echo

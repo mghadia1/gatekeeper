@@ -26,7 +26,7 @@ func TestParseValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	users, orders := cfg.Backends["users"], cfg.Backends["orders"]
-	if users.URL.String() != "http://users:9000" || users.Timeout != time.Second {
+	if len(users.URLs) != 1 || users.URLs[0].String() != "http://users:9000" || users.Timeout != time.Second {
 		t.Errorf("users = %+v, want http://users:9000 with a 1s timeout", users)
 	}
 	if orders.Timeout != 3*time.Second {
@@ -34,6 +34,38 @@ func TestParseValid(t *testing.T) {
 	}
 	if len(cfg.Routes) != 2 || cfg.Routes[1] != (Route{"/api/orders/", "orders", "/api"}) {
 		t.Errorf("routes = %+v", cfg.Routes)
+	}
+}
+
+func TestSeveralInstancesHealthChecksAndEjection(t *testing.T) {
+	cfg, err := Parse([]byte(`{
+	  "backends": {
+	    "users": {
+	      "urls": ["http://users-1:9000", "http://users-2:9000"],
+	      "health_check": {"interval": "2s", "unhealthy_after": 4},
+	      "eject_after": 5, "eject_for": "30s"
+	    },
+	    "plain": {"url": "http://plain"}
+	  },
+	  "routes": [{"match": "/", "backend": "users"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := cfg.Backends["users"]
+	if len(users.URLs) != 2 || users.URLs[1].Host != "users-2:9000" {
+		t.Errorf("urls = %v", users.URLs)
+	}
+	want := HealthCheck{Path: "/healthz", Interval: 2 * time.Second, Timeout: time.Second, UnhealthyAfter: 4, HealthyAfter: 2}
+	if users.HealthCheck == nil || *users.HealthCheck != want {
+		t.Errorf("health check = %+v, want %+v (defaults filled in)", users.HealthCheck, want)
+	}
+	if users.EjectAfter != 5 || users.EjectFor != 30*time.Second {
+		t.Errorf("ejection = %d / %v, want 5 / 30s", users.EjectAfter, users.EjectFor)
+	}
+	plain := cfg.Backends["plain"]
+	if plain.HealthCheck != nil || plain.EjectAfter != DefaultEjectAfter || plain.EjectFor != DefaultEjectFor {
+		t.Errorf("plain backend = %+v, want no health check and default ejection", plain)
 	}
 }
 
@@ -71,6 +103,24 @@ func TestParseRejects(t *testing.T) {
 		},
 		"zero timeout": {
 			`{"backends": {"a": {"url": "http://a", "timeout": "0s"}}, "routes": [{"match": "/", "backend": "a"}]}`, "must be positive",
+		},
+		"url and urls": {
+			`{"backends": {"a": {"url": "http://a", "urls": ["http://b"]}}, "routes": [{"match": "/", "backend": "a"}]}`, "not both",
+		},
+		"no url": {
+			`{"backends": {"a": {}}, "routes": [{"match": "/", "backend": "a"}]}`, "url or urls is required",
+		},
+		"bad url in list": {
+			`{"backends": {"a": {"urls": ["http://ok", "gopher://no"]}}, "routes": [{"match": "/", "backend": "a"}]}`, "must be http or https",
+		},
+		"negative eject_after": {
+			`{"backends": {"a": {"url": "http://a", "eject_after": -1}}, "routes": [{"match": "/", "backend": "a"}]}`, "eject_after",
+		},
+		"relative health path": {
+			`{"backends": {"a": {"url": "http://a", "health_check": {"path": "healthz"}}}, "routes": [{"match": "/", "backend": "a"}]}`, "health_check.path",
+		},
+		"bad health interval": {
+			`{"backends": {"a": {"url": "http://a", "health_check": {"interval": "often"}}}, "routes": [{"match": "/", "backend": "a"}]}`, "health_check.interval",
 		},
 		"empty match": {
 			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": " ", "backend": "a"}]}`, "match is empty",

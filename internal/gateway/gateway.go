@@ -1,5 +1,6 @@
 // Package gateway builds the gateway's HTTP handler from a configuration:
-// the routes, a reverse proxy per route, request IDs and the access log.
+// the routes, a reverse proxy per route, a load-balanced pool per backend,
+// request IDs and the access log.
 package gateway
 
 import (
@@ -13,8 +14,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mghadia1/gatekeeper/internal/balancer"
 	"github.com/mghadia1/gatekeeper/internal/config"
 )
+
+// Gateway is the gateway's HTTP handler plus the background work it needs:
+// the health checks of each backend's instances.
+type Gateway struct {
+	handler http.Handler
+	pools   []*balancer.Pool
+}
+
+// ServeHTTP handles one request.
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) { g.handler.ServeHTTP(w, r) }
+
+// Run runs the health checks until ctx is cancelled. The gateway serves
+// without it (instances count as healthy until proven otherwise), but then
+// only passive detection notices a failed instance.
+func (g *Gateway) Run(ctx context.Context) {
+	done := make(chan struct{}, len(g.pools))
+	for _, pool := range g.pools {
+		go func() { pool.Run(ctx); done <- struct{}{} }()
+	}
+	for range g.pools {
+		<-done
+	}
+}
 
 // New returns the gateway handler for cfg.
 //
@@ -23,7 +48,7 @@ import (
 // documented and tested there. Conflicting patterns, which ServeMux reports
 // by panicking, come back here as an error, so a bad config fails at startup
 // rather than taking the process down.
-func New(cfg config.Config, version string, logger *slog.Logger) (http.Handler, error) {
+func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, error) {
 	mux := http.NewServeMux()
 	// Liveness only: it checks nothing else, so a backend outage never makes
 	// Docker restart the gateway.
@@ -31,10 +56,24 @@ func New(cfg config.Config, version string, logger *slog.Logger) (http.Handler, 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
 
+	g := &Gateway{}
+	pools := map[string]*balancer.Pool{}
+	for name, backend := range cfg.Backends {
+		pool := balancer.New(name, backend.URLs, balancer.Options{
+			HealthCheck: healthCheck(backend.HealthCheck),
+			EjectAfter:  backend.EjectAfter,
+			EjectFor:    backend.EjectFor,
+			Logger:      logger,
+		})
+		pools[name] = pool
+		g.pools = append(g.pools, pool)
+	}
+
 	transport := newTransport()
 	for _, route := range cfg.Routes {
 		backend := cfg.Backends[route.Backend]
-		if err := register(mux, route.Match, newProxy(route, backend, transport, logger)); err != nil {
+		proxy := newProxy(route, backend, pools[route.Backend], transport)
+		if err := register(mux, route.Match, proxy); err != nil {
 			return nil, fmt.Errorf("route %q: %w", route.Match, err)
 		}
 	}
@@ -59,7 +98,18 @@ func New(cfg config.Config, version string, logger *slog.Logger) (http.Handler, 
 		})
 	}))
 
-	return withRequestID(withAccessLog(mux, logger)), nil
+	g.handler = withRequestID(withAccessLog(mux, logger))
+	return g, nil
+}
+
+func healthCheck(hc *config.HealthCheck) *balancer.HealthCheck {
+	if hc == nil {
+		return nil
+	}
+	return &balancer.HealthCheck{
+		Path: hc.Path, Interval: hc.Interval, Timeout: hc.Timeout,
+		UnhealthyAfter: hc.UnhealthyAfter, HealthyAfter: hc.HealthyAfter,
+	}
 }
 
 // allowedMethods lists the methods for which some route other than the
@@ -113,9 +163,9 @@ func newTransport() *http.Transport {
 	}
 }
 
-// newProxy forwards a route's requests to its backend, within the backend's
-// timeout.
-func newProxy(route config.Route, backend config.Backend, transport http.RoundTripper, logger *slog.Logger) http.Handler {
+// newProxy forwards a route's requests to an instance of its backend, within
+// the backend's timeout, and tells the pool how the instance did.
+func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool, transport http.RoundTripper) http.Handler {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			if route.StripPrefix != "" {
@@ -127,19 +177,32 @@ func newProxy(route config.Route, backend config.Backend, transport http.RoundTr
 				// Rebuilt from Path; an escaped form would no longer match.
 				pr.Out.URL.RawPath = ""
 			}
-			// Joins the backend URL's path with the request's, and sends the
-			// backend's own host name as Host.
-			pr.SetURL(backend.URL)
+			// Joins the instance URL's path with the request's, and sends the
+			// instance's own host name as Host.
+			pr.SetURL(infoFrom(pr.In.Context()).instance.URL)
 			// X-Forwarded-For, -Host and -Proto, so the backend knows who
 			// really asked.
 			pr.SetXForwarded()
 			pr.Out.Header.Set(requestIDHeader, requestID(pr.In.Context()))
 		},
 		Transport: transport,
+		// The instance answered. A 503 is it saying it cannot serve, which
+		// counts against it like a connection failure; anything else, even
+		// another 5xx about this one request, counts as alive.
+		ModifyResponse: func(resp *http.Response) error {
+			info := infoFrom(resp.Request.Context())
+			if resp.StatusCode == http.StatusServiceUnavailable {
+				pool.ReportFailure(info.instance)
+			} else {
+				pool.ReportSuccess(info.instance)
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			info := infoFrom(r.Context())
 			switch {
 			case errors.Is(r.Context().Err(), context.DeadlineExceeded):
+				pool.ReportFailure(info.instance)
 				info.err = err
 				writeJSON(w, http.StatusGatewayTimeout, map[string]string{
 					"error":      fmt.Sprintf("backend %q did not answer within %s", backend.Name, backend.Timeout),
@@ -151,6 +214,7 @@ func newProxy(route config.Route, backend config.Backend, transport http.RoundTr
 				info.err = err
 				info.status = statusClientClosedRequest
 			default:
+				pool.ReportFailure(info.instance)
 				info.err = err
 				writeJSON(w, http.StatusBadGateway, map[string]string{
 					"error":      fmt.Sprintf("backend %q is unreachable", backend.Name),
@@ -164,6 +228,7 @@ func newProxy(route config.Route, backend config.Backend, transport http.RoundTr
 		info := infoFrom(r.Context())
 		info.route = route.Match
 		info.backend = backend.Name
+		info.instance = pool.Pick()
 		// The timeout covers the whole exchange with the backend, including
 		// copying its response body to the client.
 		ctx, cancel := context.WithTimeout(r.Context(), backend.Timeout)

@@ -64,7 +64,7 @@ func run(listen string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	handler, err := gateway.New(cfg, version, logger)
+	gw, err := gateway.New(cfg, version, logger)
 	if err != nil {
 		return fmt.Errorf("%s: %w", configPath, err)
 	}
@@ -77,9 +77,17 @@ func run(listen string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Health checks run alongside the server. They stop when it does, for
+	// whatever reason: cancel first, then wait. (Deferred calls run in
+	// reverse order, so relying on stop() above to cancel would wait for the
+	// checks before cancelling them, and hang if Serve failed early.)
+	checksCtx, cancelChecks := context.WithCancel(ctx)
+	checks := make(chan struct{})
+	go func() { gw.Run(checksCtx); close(checks) }()
+	defer func() { cancelChecks(); <-checks }()
 	logger.Info("listening", "address", ln.Addr().String(), "version", version,
 		"routes", len(cfg.Routes), "backends", len(cfg.Backends))
-	if err := server.Serve(ctx, ln, handler, shutdownTimeout); err != nil {
+	if err := server.Serve(ctx, ln, gw, shutdownTimeout); err != nil {
 		return err
 	}
 	logger.Info("shut down cleanly")

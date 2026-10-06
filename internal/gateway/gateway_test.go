@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -66,7 +65,7 @@ func mustURL(t *testing.T, raw string) *url.URL {
 // fixture is a gateway in front of two test backends and one that is down.
 type fixture struct {
 	gateway *httptest.Server
-	logs    *bytes.Buffer
+	logs    *logBuffer
 	users   *httptest.Server
 }
 
@@ -82,10 +81,10 @@ func newFixture(t *testing.T) fixture {
 
 	cfg := config.Config{
 		Backends: map[string]config.Backend{
-			"users":  {Name: "users", URL: mustURL(t, users.URL), Timeout: 2 * time.Second},
-			"strict": {Name: "strict", URL: mustURL(t, users.URL), Timeout: 100 * time.Millisecond},
-			"orders": {Name: "orders", URL: mustURL(t, orders.URL), Timeout: 2 * time.Second},
-			"down":   {Name: "down", URL: mustURL(t, downURL), Timeout: 2 * time.Second},
+			"users":  {Name: "users", URLs: []*url.URL{mustURL(t, users.URL)}, Timeout: 2 * time.Second},
+			"strict": {Name: "strict", URLs: []*url.URL{mustURL(t, users.URL)}, Timeout: 100 * time.Millisecond},
+			"orders": {Name: "orders", URLs: []*url.URL{mustURL(t, orders.URL)}, Timeout: 2 * time.Second},
+			"down":   {Name: "down", URLs: []*url.URL{mustURL(t, downURL)}, Timeout: 2 * time.Second},
 		},
 		Routes: []config.Route{
 			{Match: "GET /users/{id}", Backend: "users"},
@@ -96,7 +95,7 @@ func newFixture(t *testing.T) fixture {
 			{Match: "/down/", Backend: "down"},
 		},
 	}
-	logs := &bytes.Buffer{}
+	logs := &logBuffer{}
 	handler, err := New(cfg, "test", slog.New(slog.NewJSONHandler(logs, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +276,7 @@ func TestEachRequestIsLoggedOnceWithRouteAndOutcome(t *testing.T) {
 }
 
 func TestConflictingRoutesAreAConfigErrorNotAPanic(t *testing.T) {
-	backend := config.Backend{Name: "a", URL: mustURL(t, "http://a"), Timeout: time.Second}
+	backend := config.Backend{Name: "a", URLs: []*url.URL{mustURL(t, "http://a")}, Timeout: time.Second}
 	cfg := config.Config{
 		Backends: map[string]config.Backend{"a": backend},
 		Routes: []config.Route{
@@ -294,7 +293,7 @@ func TestConflictingRoutesAreAConfigErrorNotAPanic(t *testing.T) {
 func TestAConfigMayClaimTheRootItself(t *testing.T) {
 	users := testBackend(t, "users")
 	cfg := config.Config{
-		Backends: map[string]config.Backend{"u": {Name: "u", URL: mustURL(t, users.URL), Timeout: time.Second}},
+		Backends: map[string]config.Backend{"u": {Name: "u", URLs: []*url.URL{mustURL(t, users.URL)}, Timeout: time.Second}},
 		Routes:   []config.Route{{Match: "/", Backend: "u"}},
 	}
 	handler, err := New(cfg, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))

@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/mghadia1/gatekeeper/internal/balancer"
 )
 
 const requestIDHeader = "X-Request-ID"
@@ -28,10 +30,11 @@ const (
 // requestInfo is filled in as a request passes through the gateway and read
 // by the access log when it completes.
 type requestInfo struct {
-	route   string
-	backend string
-	status  int // overrides the written status (only for 499)
-	err     error
+	route    string
+	backend  string
+	instance *balancer.Instance
+	status   int // overrides the written status (only for 499)
+	err      error
 }
 
 func requestID(ctx context.Context) string {
@@ -96,6 +99,9 @@ func withAccessLog(next http.Handler, logger *slog.Logger) http.Handler {
 		}
 		if info.route != "" {
 			attrs = append(attrs, slog.String("route", info.route), slog.String("backend", info.backend))
+		}
+		if info.instance != nil {
+			attrs = append(attrs, slog.String("instance", info.instance.URL.Host))
 		}
 		if info.err != nil {
 			attrs = append(attrs, slog.String("error", info.err.Error()))
