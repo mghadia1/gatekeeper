@@ -15,12 +15,12 @@ is doing through metrics.
 
 | # | Milestone | Status |
 |---|-----------|--------|
-| 0 | Skeleton: Go module, CI, `/healthz`, graceful shutdown, distroless image, Compose | Built; waiting on CI |
-| 1 | Routing: config file, method + path-pattern matching, reverse proxy, request IDs, timeouts | Built; waiting on CI |
-| 2 | Load balancing, active health checks, passive failure detection | Built; waiting on CI |
-| 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Built; waiting on CI |
-| 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Built; waiting on CI |
-| 5 | Observability: Prometheus metrics, JSON logs | Built; waiting on CI |
+| 0 | Skeleton: Go module, CI, `/healthz`, graceful shutdown, distroless image, Compose | Done |
+| 1 | Routing: config file, method + path-pattern matching, reverse proxy, request IDs, timeouts | Done |
+| 2 | Load balancing, active health checks, passive failure detection | Done |
+| 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Done |
+| 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Done |
+| 5 | Observability: Prometheus metrics, JSON logs | Done |
 | 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Tooling built; no results yet |
 | 7 | Architecture diagram, design decisions, benchmarks | Diagram, decisions and failures written; benchmarks wait on Milestone 6 |
 
