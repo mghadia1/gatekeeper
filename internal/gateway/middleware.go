@@ -30,11 +30,13 @@ const (
 // requestInfo is filled in as a request passes through the gateway and read
 // by the access log when it completes.
 type requestInfo struct {
-	route    string
-	backend  string
-	instance *balancer.Instance
-	status   int // overrides the written status (only for 499)
-	err      error
+	route       string
+	backend     string
+	instance    *balancer.Instance
+	client      string // the rate limit key: a hashed API key or an IP
+	rateLimited bool
+	status      int // overrides the written status (only for 499)
+	err         error
 }
 
 func requestID(ctx context.Context) string {
@@ -102,6 +104,12 @@ func withAccessLog(next http.Handler, logger *slog.Logger) http.Handler {
 		}
 		if info.instance != nil {
 			attrs = append(attrs, slog.String("instance", info.instance.URL.Host))
+		}
+		if info.client != "" {
+			attrs = append(attrs, slog.String("client", info.client))
+		}
+		if info.rateLimited {
+			attrs = append(attrs, slog.Bool("rate_limited", true))
 		}
 		if info.err != nil {
 			attrs = append(attrs, slog.String("error", info.err.Error()))

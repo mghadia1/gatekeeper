@@ -68,6 +68,7 @@ func run(listen string, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", configPath, err)
 	}
+	defer gw.Close()
 
 	// SIGTERM is what `docker stop` sends; SIGINT is Ctrl-C.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)

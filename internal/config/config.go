@@ -41,6 +41,22 @@ import (
 type Config struct {
 	Routes   []Route
 	Backends map[string]Backend
+	// RateLimit is nil when clients are not rate-limited.
+	RateLimit *RateLimit
+}
+
+// RateLimit limits each client to a token bucket.
+type RateLimit struct {
+	RequestsPerSecond float64
+	Burst             int
+	// KeyHeader names the API key header that identifies a client; clients
+	// without one are identified by IP address.
+	KeyHeader string
+	Store     string // "memory" (one gateway) or "redis" (shared by replicas)
+	RedisURL  string
+	// FailOpen: if the store is unreachable, let requests through (true)
+	// or refuse them with 503 (false).
+	FailOpen bool
 }
 
 // Route sends requests matching Match to a backend.
@@ -88,6 +104,16 @@ type file struct {
 	DefaultTimeout string                 `json:"default_timeout"`
 	Backends       map[string]fileBackend `json:"backends"`
 	Routes         []fileRoute            `json:"routes"`
+	RateLimit      *fileRateLimit         `json:"rate_limit"`
+}
+
+type fileRateLimit struct {
+	RequestsPerSecond float64 `json:"requests_per_second"`
+	Burst             int     `json:"burst"`
+	KeyHeader         *string `json:"key_header"`
+	Store             string  `json:"store"`
+	RedisURL          string  `json:"redis_url"`
+	OnStoreError      string  `json:"on_store_error"`
 }
 
 type fileBackend struct {
@@ -182,10 +208,58 @@ func Parse(data []byte) (Config, error) {
 		cfg.Routes = append(cfg.Routes, Route{Match: r.Match, Backend: r.Backend, StripPrefix: r.StripPrefix})
 	}
 
+	if f.RateLimit != nil {
+		limit, errs := parseRateLimit(*f.RateLimit)
+		problems = append(problems, errs...)
+		cfg.RateLimit = limit
+	}
+
 	if err := errors.Join(problems...); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func parseRateLimit(f fileRateLimit) (*RateLimit, []error) {
+	var problems []error
+	fail := func(format string, args ...any) {
+		problems = append(problems, fmt.Errorf("rate_limit: "+format, args...))
+	}
+	limit := &RateLimit{
+		RequestsPerSecond: f.RequestsPerSecond, Burst: f.Burst,
+		KeyHeader: "X-API-Key", Store: "memory", RedisURL: f.RedisURL, FailOpen: true,
+	}
+	if f.KeyHeader != nil {
+		limit.KeyHeader = *f.KeyHeader // "" turns API keys off: IP only
+	}
+	if f.RequestsPerSecond <= 0 {
+		fail("requests_per_second must be positive")
+	}
+	if f.Burst < 1 {
+		fail("burst must be at least 1")
+	}
+	switch f.Store {
+	case "", "memory":
+		if f.RedisURL != "" {
+			fail("redis_url is set but store is memory")
+		}
+	case "redis":
+		limit.Store = "redis"
+		u, err := url.Parse(f.RedisURL)
+		if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
+			fail("store redis needs redis_url like redis://host:6379/0")
+		}
+	default:
+		fail("store must be memory or redis, not %q", f.Store)
+	}
+	switch f.OnStoreError {
+	case "", "allow":
+	case "deny":
+		limit.FailOpen = false
+	default:
+		fail("on_store_error must be allow or deny, not %q", f.OnStoreError)
+	}
+	return limit, problems
 }
 
 func parseBackend(name string, b fileBackend, fallbackTimeout time.Duration) (Backend, []error) {

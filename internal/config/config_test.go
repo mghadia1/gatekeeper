@@ -69,6 +69,37 @@ func TestSeveralInstancesHealthChecksAndEjection(t *testing.T) {
 	}
 }
 
+func TestRateLimit(t *testing.T) {
+	cfg, err := Parse([]byte(`{
+	  "backends": {"a": {"url": "http://a"}},
+	  "routes": [{"match": "/", "backend": "a"}],
+	  "rate_limit": {"requests_per_second": 5, "burst": 10, "store": "redis",
+	                 "redis_url": "redis://redis:6379/0", "on_store_error": "deny"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RateLimit{RequestsPerSecond: 5, Burst: 10, KeyHeader: "X-API-Key", Store: "redis",
+		RedisURL: "redis://redis:6379/0", FailOpen: false}
+	if cfg.RateLimit == nil || *cfg.RateLimit != want {
+		t.Fatalf("rate limit = %+v, want %+v", cfg.RateLimit, want)
+	}
+
+	cfg, err = Parse([]byte(`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}],
+	  "rate_limit": {"requests_per_second": 1, "burst": 1, "key_header": ""}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rl := cfg.RateLimit; rl.Store != "memory" || !rl.FailOpen || rl.KeyHeader != "" {
+		t.Fatalf("defaults = %+v, want memory, fail open, and key_header \"\" kept (IP only)", rl)
+	}
+
+	cfg, _ = Parse([]byte(`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}]}`))
+	if cfg.RateLimit != nil {
+		t.Fatal("no rate_limit block should mean no rate limiting")
+	}
+}
+
 func TestBuiltInDefaultTimeout(t *testing.T) {
 	cfg, err := Parse([]byte(`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}]}`))
 	if err != nil {
@@ -121,6 +152,21 @@ func TestParseRejects(t *testing.T) {
 		},
 		"bad health interval": {
 			`{"backends": {"a": {"url": "http://a", "health_check": {"interval": "often"}}}, "routes": [{"match": "/", "backend": "a"}]}`, "health_check.interval",
+		},
+		"zero rate": {
+			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}], "rate_limit": {"requests_per_second": 0, "burst": 1}}`, "requests_per_second",
+		},
+		"zero burst": {
+			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}], "rate_limit": {"requests_per_second": 1, "burst": 0}}`, "burst",
+		},
+		"redis without url": {
+			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}], "rate_limit": {"requests_per_second": 1, "burst": 1, "store": "redis"}}`, "redis_url",
+		},
+		"unknown store": {
+			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}], "rate_limit": {"requests_per_second": 1, "burst": 1, "store": "etcd"}}`, "memory or redis",
+		},
+		"bad on_store_error": {
+			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}], "rate_limit": {"requests_per_second": 1, "burst": 1, "on_store_error": "maybe"}}`, "allow or deny",
 		},
 		"empty match": {
 			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": " ", "backend": "a"}]}`, "match is empty",

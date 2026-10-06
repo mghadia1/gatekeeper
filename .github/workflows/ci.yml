@@ -9,6 +9,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # The rate limiter's integration test runs against this Redis; without
+      # the variable it would fail here (in CI) rather than skip.
+      GATEKEEPER_TEST_REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v7
 

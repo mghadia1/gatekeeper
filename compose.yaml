@@ -1,33 +1,55 @@
-# The gateway in front of test backends (all the echo service): "users" with
-# two instances, and "orders". Redis arrives in Milestone 3, Prometheus in
-# Milestone 5.
+# Two gateway replicas (8080 and 8081) sharing one rate limit through Redis,
+# in front of test backends (all the echo service): "users" with two
+# instances, and "orders". Prometheus arrives in Milestone 5.
 x-echo: &echo
   build:
     context: .
     target: echo
   restart: unless-stopped
 
+x-gatekeeper: &gatekeeper
+  build:
+    context: .
+    target: gatekeeper
+    args:
+      VERSION: ${VERSION:-dev}
+  environment:
+    GATEKEEPER_CONFIG: /etc/gatekeeper/config.json
+  volumes:
+    - ./config/gatekeeper.json:/etc/gatekeeper/config.json:ro
+  depends_on:
+    users-1:
+      condition: service_healthy
+    users-2:
+      condition: service_healthy
+    orders:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
 services:
   gatekeeper:
-    build:
-      context: .
-      target: gatekeeper
-      args:
-        VERSION: ${VERSION:-dev}
+    <<: *gatekeeper
     ports:
       - "8080:8080"
-    environment:
-      GATEKEEPER_CONFIG: /etc/gatekeeper/config.json
-    volumes:
-      - ./config/gatekeeper.json:/etc/gatekeeper/config.json:ro
-    depends_on:
-      users-1:
-        condition: service_healthy
-      users-2:
-        condition: service_healthy
-      orders:
-        condition: service_healthy
-    restart: unless-stopped
+
+  # A second replica with the same config, to show the rate limit is shared.
+  gatekeeper-2:
+    <<: *gatekeeper
+    ports:
+      - "8081:8080"
+
+  redis:
+    image: redis:8-alpine
+    # Published only on localhost, for the integration test (make test-redis).
+    ports:
+      - "127.0.0.1:6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   users-1:
     <<: *echo

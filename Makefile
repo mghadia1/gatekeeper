@@ -1,4 +1,4 @@
-.PHONY: build test lint up down smoke clean
+.PHONY: build test test-redis lint up down smoke clean
 
 build:
 	go build -o bin/gatekeeper ./cmd/gatekeeper
@@ -6,6 +6,11 @@ build:
 # -race matters: the gateway handles every request on its own goroutine.
 test:
 	go test -race -count=1 ./...
+
+# The rate limiter's Lua script against a real Redis (Compose's, on 6390).
+test-redis:
+	docker compose up --detach --wait redis
+	GATEKEEPER_TEST_REDIS_URL=redis://127.0.0.1:6390/0 go test -race -count=1 -run Redis ./internal/ratelimit/
 
 lint:
 	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then \

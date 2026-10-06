@@ -23,6 +23,16 @@ import (
 type Gateway struct {
 	handler http.Handler
 	pools   []*balancer.Pool
+	limiter *limiter // nil without rate limiting
+}
+
+// Close releases what the gateway holds open (the rate limiter's Redis
+// connections).
+func (g *Gateway) Close() error {
+	if g.limiter == nil {
+		return nil
+	}
+	return g.limiter.closer()
 }
 
 // ServeHTTP handles one request.
@@ -69,10 +79,21 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 		g.pools = append(g.pools, pool)
 	}
 
+	if cfg.RateLimit != nil {
+		l, err := newLimiter(cfg.RateLimit, logger)
+		if err != nil {
+			return nil, err
+		}
+		g.limiter = l
+	}
+
 	transport := newTransport()
 	for _, route := range cfg.Routes {
 		backend := cfg.Backends[route.Backend]
 		proxy := newProxy(route, backend, pools[route.Backend], transport)
+		if g.limiter != nil {
+			proxy = g.limiter.wrap(proxy)
+		}
 		if err := register(mux, route.Match, proxy); err != nil {
 			return nil, fmt.Errorf("route %q: %w", route.Match, err)
 		}

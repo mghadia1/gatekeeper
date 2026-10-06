@@ -5,9 +5,10 @@ backend services that routes requests, spreads load across healthy
 instances, rate-limits clients, survives backend failures, and shows what it
 is doing through metrics.
 
-> **Status:** Milestones 0-2 of 7. It routes requests from a config file and
-> spreads them across a backend's healthy instances. Rate limiting, circuit
-> breakers, metrics and the load test are planned, not built.
+> **Status:** Milestones 0-3 of 7. It routes requests from a config file,
+> spreads them across a backend's healthy instances, and rate-limits each
+> client with a limit shared by every gateway replica. Circuit breakers,
+> retries, metrics and the load test are planned, not built.
 
 ## Status
 
@@ -16,7 +17,7 @@ is doing through metrics.
 | 0 | Skeleton: Go module, CI, `/healthz`, graceful shutdown, distroless image, Compose | Built; waiting on CI |
 | 1 | Routing: config file, method + path-pattern matching, reverse proxy, request IDs, timeouts | Built; waiting on CI |
 | 2 | Load balancing, active health checks, passive failure detection | Built; waiting on CI |
-| 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Not started |
+| 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Built; waiting on CI |
 | 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Not started |
 | 5 | Observability: Prometheus metrics, JSON logs | Not started |
 | 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Not started |
@@ -33,9 +34,10 @@ curl -X DELETE http://localhost:8080/api/orders/7   # to "orders", as /orders/7
 docker compose down
 ```
 
-Compose runs the gateway in front of test backends (all `cmd/echo`, which
-answers with a JSON description of what reached it): `users` with two
-instances, and `orders`, using `config/gatekeeper.json`.
+Compose runs two gateway replicas (8080 and 8081) sharing a rate limit
+through Redis, in front of test backends (all `cmd/echo`, which answers with
+a JSON description of what reached it): `users` with two instances, and
+`orders`, using `config/gatekeeper.json`.
 
 ## Configuration
 
@@ -57,7 +59,13 @@ instances, and `orders`, using `config/gatekeeper.json`.
     {"match": "POST /users", "backend": "users"},
     {"match": "/api/orders/", "backend": "orders", "strip_prefix": "/api"},
     {"match": "GET /slow", "backend": "users-strict"}
-  ]
+  ],
+  "rate_limit": {
+    "requests_per_second": 5, "burst": 10,
+    "key_header": "X-API-Key",
+    "store": "redis", "redis_url": "redis://redis:6379/0",
+    "on_store_error": "allow"
+  }
 }
 ```
 
@@ -132,6 +140,50 @@ reverse order, so on a startup failure it would have waited for checks that
 only stop when `stop()` runs, and hung. It now cancels the checks itself
 before waiting.
 
+## Rate limiting
+
+Each client gets a token bucket: up to `burst` requests at once, refilled at
+`requests_per_second`. A refused request gets `429` with `Retry-After` (whole
+seconds, rounded up); every limited response carries `X-RateLimit-Limit` and
+`X-RateLimit-Remaining`. Only proxied routes are limited; `/healthz` and
+404s are not.
+
+- **Who is a client.** The API key in `key_header` if the request has one,
+  hashed (keys never reach Redis or the logs); otherwise the connection's IP.
+  `X-Forwarded-For` is not trusted, since any client can set it.
+- **Fractional tokens.** At 10 per second, half a token is back 50 ms after
+  the bucket empties. A version that counted whole tokens and reset its
+  clock on every request would starve a client that asks at exactly the
+  refill rate; a test checks such a client is never refused.
+- **`store: "memory"`** keeps buckets in the process, sweeping ones idle long
+  enough to be full again, so memory does not grow with every client ever
+  seen. Each replica has its own, so N replicas allow N times the limit.
+- **`store: "redis"`** shares the buckets. One Lua script does the whole
+  refill-and-take inside Redis, so two replicas cannot both spend the last
+  token, and it uses Redis's clock, not the replicas'. Keys expire once a
+  bucket would be full again. The token count is stored as a string: Lua
+  numbers returned to Redis are truncated to integers.
+- **If Redis fails**, `on_store_error` decides: `allow` (the default: the
+  limiter is protection, and a Redis outage should not take the API down)
+  or `deny` (503). After a failure the limiter skips Redis for 1 s, and logs
+  the outage at most every 5 s.
+
+Measured: in the smoke test, 60 requests with one key, alternating between
+the two replicas as fast as they would go (0.1 s), got **10 through and 50
+refused**: exactly the burst, once, not once per replica. With Redis
+stopped, requests went through. The same Lua script runs against a real
+Redis in CI, with two clients as two replicas taking from one bucket at
+once.
+
+**A bug found while building it.** The first fail-open path took about
+**1.7 s per request** while Redis was down: go-redis retries a failed
+command 3 times and a failed dial 5 times, with backoff, by default. Failing
+open but slowly is close to failing. The limiter's client now has retries
+off (`MaxRetries` is `-1`; `0` means "use the default"), plus the 1 s
+skip, and a test requires each request during an outage to finish in under
+300 ms. go-redis also printed its own plain-text log lines; they now go
+through the gateway's JSON logger.
+
 ## The server itself
 
 - `GET /healthz` is liveness only: the process is up and serving. It checks
@@ -152,13 +204,16 @@ before waiting.
 Needs Go 1.27.
 
 ```bash
-make test    # go test -race ./...
+make test        # go test -race ./...
+make test-redis  # the rate limiter's Lua script against Compose's Redis
 make lint    # gofmt and go vet
 make smoke   # start the stack; check routing, ids, 404/405/502/504 and a clean SIGTERM stop
 ```
 
-CI runs gofmt, vet, `go test -race` and a build, then a Compose job that
-starts the stack and runs the smoke test over real HTTP.
+CI runs gofmt, vet, `go test -race` (with a Redis service, so the rate
+limiter's integration test runs; without it the test skips locally and fails
+in CI) and a build, then a Compose job that starts the stack and runs the
+smoke test over real HTTP.
 
 ## License
 

@@ -2,20 +2,60 @@
   "default_timeout": "5s",
   "backends": {
     "users": {
-      "urls": ["http://users-1:9000", "http://users-2:9000"],
-      "health_check": {"path": "/healthz", "interval": "1s", "timeout": "500ms", "unhealthy_after": 2, "healthy_after": 2},
+      "urls": [
+        "http://users-1:9000",
+        "http://users-2:9000"
+      ],
+      "health_check": {
+        "path": "/healthz",
+        "interval": "1s",
+        "timeout": "500ms",
+        "unhealthy_after": 2,
+        "healthy_after": 2
+      },
       "eject_after": 3,
       "eject_for": "10s"
     },
-    "users-strict": {"url": "http://users-1:9000", "timeout": "500ms"},
-    "orders": {"url": "http://orders:9000"},
-    "offline": {"url": "http://127.0.0.1:9"}
+    "users-strict": {
+      "url": "http://users-1:9000",
+      "timeout": "500ms"
+    },
+    "orders": {
+      "url": "http://orders:9000"
+    },
+    "offline": {
+      "url": "http://127.0.0.1:9"
+    }
   },
   "routes": [
-    {"match": "GET /users/{id}", "backend": "users"},
-    {"match": "POST /users", "backend": "users"},
-    {"match": "/api/orders/", "backend": "orders", "strip_prefix": "/api"},
-    {"match": "GET /slow", "backend": "users-strict"},
-    {"match": "/offline/", "backend": "offline"}
-  ]
+    {
+      "match": "GET /users/{id}",
+      "backend": "users"
+    },
+    {
+      "match": "POST /users",
+      "backend": "users"
+    },
+    {
+      "match": "/api/orders/",
+      "backend": "orders",
+      "strip_prefix": "/api"
+    },
+    {
+      "match": "GET /slow",
+      "backend": "users-strict"
+    },
+    {
+      "match": "/offline/",
+      "backend": "offline"
+    }
+  ],
+  "rate_limit": {
+    "requests_per_second": 5,
+    "burst": 10,
+    "key_header": "X-API-Key",
+    "store": "redis",
+    "redis_url": "redis://redis:6379/0",
+    "on_store_error": "allow"
+  }
 }
