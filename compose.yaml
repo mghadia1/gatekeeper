@@ -1,11 +1,37 @@
-# Milestone 0: the gateway only. Backends arrive in Milestone 1, Redis in
-# Milestone 3, Prometheus in Milestone 5.
+# The gateway in front of two test backends ("users" and "orders", both the
+# echo service). Redis arrives in Milestone 3, Prometheus in Milestone 5.
+x-echo: &echo
+  build:
+    context: .
+    target: echo
+  restart: unless-stopped
+
 services:
   gatekeeper:
     build:
       context: .
+      target: gatekeeper
       args:
         VERSION: ${VERSION:-dev}
     ports:
       - "8080:8080"
+    environment:
+      GATEKEEPER_CONFIG: /etc/gatekeeper/config.json
+    volumes:
+      - ./config/gatekeeper.json:/etc/gatekeeper/config.json:ro
+    depends_on:
+      users:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
     restart: unless-stopped
+
+  users:
+    <<: *echo
+    environment:
+      ECHO_NAME: users
+
+  orders:
+    <<: *echo
+    environment:
+      ECHO_NAME: orders

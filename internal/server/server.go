@@ -1,37 +1,16 @@
-// Package server holds the gateway's HTTP handler and its lifecycle:
-// serving, graceful shutdown, and the probe the container health check uses.
+// Package server holds the HTTP server's lifecycle: serving, graceful
+// shutdown, and the probe the container health checks use. The gateway's
+// handler itself is in package gateway.
 package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"time"
 )
-
-// Handler returns the gateway's HTTP handler. In Milestone 0 it has one
-// route; proxying arrives in Milestone 1.
-func Handler(version string) http.Handler {
-	mux := http.NewServeMux()
-	// Liveness only: the process is up and serving. It deliberately checks
-	// nothing else, so a backend outage never makes Docker restart the
-	// gateway.
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
-	})
-	return mux
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	// The bodies written here are small maps of strings; encoding cannot fail
-	// in a way the client could still be told about.
-	_ = json.NewEncoder(w).Encode(body)
-}
 
 // Serve serves handler on ln until ctx is cancelled, then shuts down
 // gracefully: it stops accepting connections and waits up to shutdownTimeout

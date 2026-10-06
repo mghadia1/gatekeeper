@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -11,41 +10,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestHealthzReportsOKAndVersion(t *testing.T) {
-	rec := httptest.NewRecorder()
-	Handler("1.2.3").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", ct)
-	}
-	var body map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("body is not JSON: %v", err)
-	}
-	if body["status"] != "ok" || body["version"] != "1.2.3" {
-		t.Errorf("body = %v, want status ok and version 1.2.3", body)
-	}
-}
-
-func TestHealthzRejectsOtherMethods(t *testing.T) {
-	rec := httptest.NewRecorder()
-	Handler("dev").ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/healthz", nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /healthz status = %d, want 405", rec.Code)
-	}
-}
-
-func TestUnknownPathIs404(t *testing.T) {
-	rec := httptest.NewRecorder()
-	Handler("dev").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
-	}
-}
 
 func listen(t *testing.T) net.Listener {
 	t.Helper()
@@ -124,7 +88,11 @@ func TestServeGivesUpOnRequestsThatOutliveTheTimeout(t *testing.T) {
 }
 
 func TestProbe(t *testing.T) {
-	ok := httptest.NewServer(Handler("dev"))
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+		}
+	}))
 	defer ok.Close()
 	if err := Probe(ok.URL+"/healthz", time.Second); err != nil {
 		t.Errorf("Probe of a healthy server = %v, want nil", err)

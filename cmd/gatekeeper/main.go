@@ -8,6 +8,9 @@
 //
 // Configuration comes from the environment:
 //
+//	GATEKEEPER_CONFIG            routes and backends, a JSON file (default
+//	                             "/etc/gatekeeper/config.json"; see
+//	                             internal/config)
 //	GATEKEEPER_LISTEN            address to listen on (default ":8080")
 //	GATEKEEPER_SHUTDOWN_TIMEOUT  how long to let requests in flight finish
 //	                             on SIGTERM (default "10s")
@@ -24,6 +27,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mghadia1/gatekeeper/internal/config"
+	"github.com/mghadia1/gatekeeper/internal/gateway"
 	"github.com/mghadia1/gatekeeper/internal/server"
 )
 
@@ -54,6 +59,16 @@ func run(listen string, logger *slog.Logger) error {
 		return fmt.Errorf("GATEKEEPER_SHUTDOWN_TIMEOUT: %w", err)
 	}
 
+	configPath := envOr("GATEKEEPER_CONFIG", "/etc/gatekeeper/config.json")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	handler, err := gateway.New(cfg, version, logger)
+	if err != nil {
+		return fmt.Errorf("%s: %w", configPath, err)
+	}
+
 	// SIGTERM is what `docker stop` sends; SIGINT is Ctrl-C.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -62,8 +77,9 @@ func run(listen string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("listening", "address", ln.Addr().String(), "version", version)
-	if err := server.Serve(ctx, ln, server.Handler(version), shutdownTimeout); err != nil {
+	logger.Info("listening", "address", ln.Addr().String(), "version", version,
+		"routes", len(cfg.Routes), "backends", len(cfg.Backends))
+	if err := server.Serve(ctx, ln, handler, shutdownTimeout); err != nil {
 		return err
 	}
 	logger.Info("shut down cleanly")

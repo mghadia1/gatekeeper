@@ -1,0 +1,16 @@
+{
+  "default_timeout": "5s",
+  "backends": {
+    "users": {"url": "http://users:9000"},
+    "users-strict": {"url": "http://users:9000", "timeout": "500ms"},
+    "orders": {"url": "http://orders:9000"},
+    "offline": {"url": "http://127.0.0.1:9"}
+  },
+  "routes": [
+    {"match": "GET /users/{id}", "backend": "users"},
+    {"match": "POST /users", "backend": "users"},
+    {"match": "/api/orders/", "backend": "orders", "strip_prefix": "/api"},
+    {"match": "GET /slow", "backend": "users-strict"},
+    {"match": "/offline/", "backend": "offline"}
+  ]
+}
