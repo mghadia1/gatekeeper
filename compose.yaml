@@ -1,6 +1,7 @@
 # Two gateway replicas (8080 and 8081) sharing one rate limit through Redis,
 # in front of test backends (all the echo service): "users" with two
-# instances, and "orders". Prometheus arrives in Milestone 5.
+# instances, and "orders". Prometheus scrapes the replicas' admin ports
+# (9091 inside the network; 9091 and 9092 on localhost).
 x-echo: &echo
   build:
     context: .
@@ -33,12 +34,26 @@ services:
     <<: *gatekeeper
     ports:
       - "8080:8080"
+      # The admin port (metrics), on localhost only.
+      - "127.0.0.1:9091:9091"
 
   # A second replica with the same config, to show the rate limit is shared.
   gatekeeper-2:
     <<: *gatekeeper
     ports:
       - "8081:8080"
+      - "127.0.0.1:9092:9091"
+
+  prometheus:
+    image: prom/prometheus:v3.7.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - gatekeeper
+      - gatekeeper-2
 
   redis:
     image: redis:8-alpine

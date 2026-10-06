@@ -34,6 +34,8 @@ type retryTransport struct {
 	pool    *balancer.Pool
 	retries int
 	budget  *resilience.RetryBudget
+	backend string
+	metrics *metrics
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -48,6 +50,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		switch judge(ctx, resp, err) {
 		case answered:
 			t.pool.ReportSuccess(instance)
+			t.metrics.attempts.WithLabelValues(t.backend, "success").Inc()
 			info.outcome = resilience.Success
 			return resp, nil
 		case notTheBackend:
@@ -56,6 +59,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		t.pool.ReportFailure(instance)
+		t.metrics.attempts.WithLabelValues(t.backend, "failure").Inc()
 		info.outcome = resilience.Failure
 		if attempt > t.retries || ctx.Err() != nil || !retryable(req, resp, err) || !t.budget.TryRetry() {
 			return resp, err
@@ -65,6 +69,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()
 		}
+		t.metrics.retries.WithLabelValues(t.backend).Inc()
 		next := t.pool.PickExcept(instance)
 		info.instance = next
 		req = req.Clone(ctx)

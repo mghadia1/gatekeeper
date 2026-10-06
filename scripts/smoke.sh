@@ -4,7 +4,8 @@
 # across two instances, losing one with no failed requests (retries) and
 # regaining it, a rate limit shared by two gateway replicas, failing open
 # when Redis is down, the circuit breaker opening and closing, the body
-# size limit, and a clean SIGTERM shutdown.
+# size limit, Prometheus metrics on the admin port only, and a clean SIGTERM
+# shutdown.
 set -euo pipefail
 base_url="${BASE_URL:-http://localhost:8080}"
 second_url="${SECOND_URL:-http://localhost:8081}"
@@ -104,6 +105,17 @@ docker compose start orders >/dev/null
 sleep 4   # open_for is 3 s; then one probe, which succeeds and closes it
 expect "orders back: circuit closes" "$(status "$base_url/api/orders/1")" "200"
 expect "and stays closed" "$(status "$base_url/api/orders/2")" "200"
+
+# Metrics: on the admin port, not the public one; and Prometheus has them.
+metrics="$(command curl -s http://127.0.0.1:9091/metrics)"
+expect "metrics labelled by route pattern" "$(grep -c 'gatekeeper_requests_total{backend="users",code="200",route="GET /users/{id}"}' <<<"$metrics")" "1"
+expect "no metrics on the public port" "$(status "$base_url/metrics")" "404"
+sleep 3   # at least one scrape after the traffic above
+query() { command curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" \
+  | python3 -c 'import json, sys; r = json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else "none")'; }
+expect "Prometheus scrapes both replicas" "$(query 'sum(up{job="gatekeeper"})')" "2"
+expect "Prometheus sees the 429s" "$(query 'sum(gatekeeper_requests_total{code="429"}) > bool 0')" "1"
+expect "Prometheus sees the circuit closed again" "$(query 'max(gatekeeper_circuit_state{backend="orders"})')" "0"
 
 docker compose stop --timeout 15 gatekeeper >/dev/null
 code="$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -a -q gatekeeper)")"

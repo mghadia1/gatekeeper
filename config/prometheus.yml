@@ -1,0 +1,10 @@
+# Scrapes both gateway replicas' admin ports (metrics are not on the public
+# port). Short intervals so the smoke test sees data within seconds.
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: gatekeeper
+    static_configs:
+      - targets: ["gatekeeper:9091", "gatekeeper-2:9091"]

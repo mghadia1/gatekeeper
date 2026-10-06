@@ -86,6 +86,11 @@ func TestTheBurstPassesThenClientsGet429WithRetryAfter(t *testing.T) {
 	if !strings.Contains(logs.String(), `"rate_limited":true`) || !strings.Contains(logs.String(), `"status":429`) {
 		t.Error("the refused request was not logged as rate limited")
 	}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"status":429`) && !strings.Contains(line, `"route":"/api/"`) {
+			t.Errorf("a refused request was logged without its route: %s", line)
+		}
+	}
 	if strings.Contains(logs.String(), "key-a") {
 		t.Error("the API key appears in the logs; it should be hashed")
 	}

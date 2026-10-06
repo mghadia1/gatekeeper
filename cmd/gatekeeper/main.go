@@ -12,6 +12,9 @@
 //	                             "/etc/gatekeeper/config.json"; see
 //	                             internal/config)
 //	GATEKEEPER_LISTEN            address to listen on (default ":8080")
+//	GATEKEEPER_ADMIN_LISTEN      address of the internal admin port, which
+//	                             serves /metrics (default ":9091"); keep it
+//	                             off the public network
 //	GATEKEEPER_SHUTDOWN_TIMEOUT  how long to let requests in flight finish
 //	                             on SIGTERM (default "10s")
 package main
@@ -21,6 +24,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -88,8 +92,23 @@ func run(listen string, logger *slog.Logger) error {
 	defer func() { cancelChecks(); <-checks }()
 	logger.Info("listening", "address", ln.Addr().String(), "version", version,
 		"routes", len(cfg.Routes), "backends", len(cfg.Backends))
+	// Metrics on their own port, shut down with the main server.
+	adminLn, err := net.Listen("tcp", envOr("GATEKEEPER_ADMIN_LISTEN", ":9091"))
+	if err != nil {
+		ln.Close()
+		return err
+	}
+	admin := http.NewServeMux()
+	admin.Handle("GET /metrics", gw.MetricsHandler())
+	adminDone := make(chan error, 1)
+	go func() { adminDone <- server.Serve(ctx, adminLn, admin, shutdownTimeout) }()
+	logger.Info("admin listening", "address", adminLn.Addr().String())
+
 	if err := server.Serve(ctx, ln, gw, shutdownTimeout); err != nil {
 		return err
+	}
+	if err := <-adminDone; err != nil {
+		return fmt.Errorf("admin: %w", err)
 	}
 	logger.Info("shut down cleanly")
 	return nil

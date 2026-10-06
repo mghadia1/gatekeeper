@@ -91,6 +91,9 @@ func New(name string, urls []*url.URL, opts Options) *Pool {
 	return p
 }
 
+// Now is the pool's clock (time.Now unless a test replaced it).
+func (p *Pool) Now() time.Time { return p.opts.Now() }
+
 // Instances returns the pool's instances, in configuration order.
 func (p *Pool) Instances() []*Instance { return p.instances }
 

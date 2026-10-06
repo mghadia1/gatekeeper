@@ -27,7 +27,13 @@ type Gateway struct {
 	handler http.Handler
 	pools   []*balancer.Pool
 	limiter *limiter // nil without rate limiting
+	metrics *metrics
 }
+
+// MetricsHandler serves the Prometheus metrics. It belongs on an internal
+// admin port, not the public one: metrics name backends, instances and
+// error rates.
+func (g *Gateway) MetricsHandler() http.Handler { return g.metrics.handler() }
 
 // Close releases what the gateway holds open (the rate limiter's Redis
 // connections).
@@ -69,7 +75,7 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
 
-	g := &Gateway{}
+	g := &Gateway{metrics: newMetrics(version)}
 	pools := map[string]*balancer.Pool{}
 	for name, backend := range cfg.Backends {
 		pool := balancer.New(name, backend.URLs, balancer.Options{
@@ -87,6 +93,7 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 		if err != nil {
 			return nil, err
 		}
+		l.metrics = g.metrics
 		g.limiter = l
 	}
 
@@ -108,9 +115,10 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 			}
 		}
 		transports[name] = &retryTransport{
-			base: base, pool: pools[name], retries: backend.Retries,
+			base: base, pool: pools[name], retries: backend.Retries, backend: name, metrics: g.metrics,
 			budget: &resilience.RetryBudget{Ratio: retryBudgetRatio, MinPerSecond: retryBudgetMinPerSecond},
 		}
+		g.metrics.watchBackend(name, pools[name], breakers[name])
 	}
 
 	for _, route := range cfg.Routes {
@@ -120,7 +128,10 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 		if g.limiter != nil {
 			proxy = g.limiter.wrap(proxy)
 		}
-		if err := register(mux, route.Match, proxy); err != nil {
+		// Outermost, so that every request matched to this route is logged
+		// and counted under it, including ones the limiter refuses before
+		// they reach the proxy.
+		if err := register(mux, route.Match, labelled(route.Match, backend.Name, proxy)); err != nil {
 			return nil, fmt.Errorf("route %q: %w", route.Match, err)
 		}
 	}
@@ -145,7 +156,7 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 		})
 	}))
 
-	g.handler = withRequestID(withAccessLog(mux, logger))
+	g.handler = withRequestID(withAccessLog(mux, logger, g.metrics))
 	return g, nil
 }
 
@@ -268,8 +279,6 @@ func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool,
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := infoFrom(r.Context())
-		info.route = route.Match
-		info.backend = backend.Name
 
 		if r.ContentLength > maxBodyBytes {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
@@ -303,6 +312,16 @@ func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool,
 		ctx, cancel := context.WithTimeout(r.Context(), backend.Timeout)
 		defer cancel()
 		proxy.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// labelled records which route and backend a request matched, for the log
+// and the metrics.
+func labelled(route, backend string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := infoFrom(r.Context())
+		info.route, info.backend = route, backend
+		next.ServeHTTP(w, r)
 	})
 }
 

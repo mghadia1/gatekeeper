@@ -5,11 +5,11 @@ backend services that routes requests, spreads load across healthy
 instances, rate-limits clients, survives backend failures, and shows what it
 is doing through metrics.
 
-> **Status:** Milestones 0-4 of 7. It routes requests from a config file,
+> **Status:** Milestones 0-5 of 7. It routes requests from a config file,
 > spreads them across a backend's healthy instances, rate-limits each client
-> with a limit shared by every gateway replica, retries safely, and stops
-> sending traffic to a failing backend. Metrics and the load test are
-> planned, not built.
+> with a limit shared by every gateway replica, retries safely, stops
+> sending traffic to a failing backend, and exports Prometheus metrics. The
+> load test is planned, not built.
 
 ## Status
 
@@ -20,7 +20,7 @@ is doing through metrics.
 | 2 | Load balancing, active health checks, passive failure detection | Built; waiting on CI |
 | 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Built; waiting on CI |
 | 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Built; waiting on CI |
-| 5 | Observability: Prometheus metrics, JSON logs | Not started |
+| 5 | Observability: Prometheus metrics, JSON logs | Built; waiting on CI |
 | 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Not started |
 | 7 | Architecture diagram, design decisions, benchmarks | Not started |
 
@@ -36,7 +36,8 @@ docker compose down
 ```
 
 Compose runs two gateway replicas (8080 and 8081) sharing a rate limit
-through Redis, in front of test backends (all `cmd/echo`, which answers with
+through Redis, scraped by Prometheus (<http://127.0.0.1:9090>), in front of
+test backends (all `cmd/echo`, which answers with
 a JSON description of what reached it): `users` with two instances, and
 `orders`, using `config/gatekeeper.json`.
 
@@ -233,6 +234,49 @@ parsed from a file has a body limit of 0, and the first version took that
 literally: every request with a body got `413`. An older test caught it.
 Zero now means the default.
 
+## Metrics
+
+Prometheus metrics are served on a separate admin port
+(`GATEKEEPER_ADMIN_LISTEN`, default `:9091`), not on the public one: they
+name backends, instance addresses and error rates, which clients have no
+business seeing, and a separate port can never clash with a configured
+route.
+
+| Metric | Labels | What |
+|--------|--------|------|
+| `gatekeeper_requests_total` | route, backend, code | requests handled |
+| `gatekeeper_request_duration_seconds` | route, backend | latency histogram, 1 ms to 10 s |
+| `gatekeeper_requests_in_flight` | | requests being handled now |
+| `gatekeeper_upstream_attempts_total` | backend, outcome | tries at an instance, retries included |
+| `gatekeeper_retries_total` | backend | retries sent to another instance |
+| `gatekeeper_rate_limit_decisions_total` | decision | allowed, refused, store_error |
+| `gatekeeper_circuit_state` | backend | 0 closed, 1 open, 2 half-open |
+| `gatekeeper_instance_healthy` | backend, instance | 1 if it takes traffic |
+| `gatekeeper_build_info` | version | always 1 |
+
+plus the Go runtime and process metrics.
+
+- **The route label is the configured pattern** (`GET /users/{id}`), never
+  the request path. A path label would add a time series for every user id
+  ever requested, which is the usual way to run a Prometheus server out of
+  memory. Requests that match no route are labelled `unmatched`. A test
+  sends three different ids and checks they produce one series.
+- **Circuit state and instance health are read at scrape time** from the
+  breaker and the pool themselves, so they cannot drift from what the
+  gateway is doing.
+- **A private registry,** not Prometheus's global one, so each gateway (and
+  each test) has its own metrics.
+
+The smoke test checks that metrics are on 9091 and not on 8080, and that
+Prometheus has scraped both replicas and recorded the run's 429s and the
+`orders` circuit closing again.
+
+**A bug the metrics tests found.** Requests refused by the rate limiter
+were counted as `unmatched`, and logged without their route: the route was
+recorded inside the proxy handler, which a refused request never reaches.
+It is now recorded first, before the limiter, the body limit or the
+breaker can turn the request away.
+
 ## The server itself
 
 - `GET /healthz` is liveness only: the process is up and serving. It checks
@@ -244,7 +288,7 @@ Zero now means the default.
 - **About 16 MB per image** (gateway and echo): a static binary in a
   distroless base, no shell or package manager, running as a non-root user. With no curl inside, the
   container health check runs the binary itself (`gatekeeper healthcheck`).
-- JSON logs on stdout (`log/slog`).
+- JSON logs on stdout (`log/slog`), including go-redis's own messages.
 - `ReadHeaderTimeout` is set, so a client that trickles headers cannot hold a
   connection open indefinitely.
 

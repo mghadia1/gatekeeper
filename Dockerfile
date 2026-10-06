@@ -24,7 +24,8 @@ ENTRYPOINT ["/echo"]
 FROM gcr.io/distroless/static-debian12:nonroot AS gatekeeper
 COPY --from=build /out/gatekeeper /gatekeeper
 USER nonroot:nonroot
-EXPOSE 8080
+# 8080 public; 9091 admin (metrics), for the internal network only.
+EXPOSE 8080 9091
 # The image has no shell or curl; the binary checks itself.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=3s --retries=3 \
     CMD ["/gatekeeper", "healthcheck"]

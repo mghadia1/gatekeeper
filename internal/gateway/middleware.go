@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,10 +76,13 @@ func newRequestID() string {
 	return hex.EncodeToString(b)
 }
 
-// withAccessLog writes one log line per request when it completes. It must
-// sit inside withRequestID, so the id is known.
-func withAccessLog(next http.Handler, logger *slog.Logger) http.Handler {
+// withAccessLog writes one log line per request when it completes, and
+// records the request's metrics. It must sit inside withRequestID, so the id
+// is known.
+func withAccessLog(next http.Handler, logger *slog.Logger, m *metrics) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.inFlight.Inc()
+		defer m.inFlight.Dec()
 		info := &requestInfo{}
 		rec := &recorder{ResponseWriter: w, requestID: requestID(r.Context())}
 		started := time.Now()
@@ -125,6 +129,13 @@ func withAccessLog(next http.Handler, logger *slog.Logger) http.Handler {
 			attrs = append(attrs, slog.String("error", info.err.Error()))
 		}
 		logger.LogAttrs(r.Context(), level, "request", attrs...)
+
+		route, backend := info.route, info.backend
+		if route == "" {
+			route, backend = unmatched, ""
+		}
+		m.requests.WithLabelValues(route, backend, strconv.Itoa(status)).Inc()
+		m.duration.WithLabelValues(route, backend).Observe(time.Since(started).Seconds())
 	})
 }
 

@@ -29,6 +29,7 @@ type limiter struct {
 	lastError atomic.Int64 // unix nanoseconds of the last store error logged
 	downUntil atomic.Int64 // unix nanoseconds until which the store is skipped
 	closer    func() error
+	metrics   *metrics
 }
 
 const (
@@ -92,6 +93,7 @@ func (l *limiter) wrap(next http.Handler) http.Handler {
 
 		decision, err := l.take(r.Context(), key)
 		if err != nil {
+			l.metrics.rateLimit.WithLabelValues("store_error").Inc()
 			l.logStoreError(err)
 			if l.failOpen {
 				next.ServeHTTP(w, r)
@@ -107,6 +109,7 @@ func (l *limiter) wrap(next http.Handler) http.Handler {
 		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(l.burst))
 		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(decision.Remaining))
 		if !decision.Allowed {
+			l.metrics.rateLimit.WithLabelValues("refused").Inc()
 			info.rateLimited = true
 			// Retry-After is in whole seconds; round up, so a client that
 			// obeys it is never early.
@@ -118,6 +121,7 @@ func (l *limiter) wrap(next http.Handler) http.Handler {
 			})
 			return
 		}
+		l.metrics.rateLimit.WithLabelValues("allowed").Inc()
 		next.ServeHTTP(w, r)
 	})
 }
