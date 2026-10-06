@@ -21,7 +21,7 @@ is doing through metrics.
 | 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Built; waiting on CI |
 | 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Built; waiting on CI |
 | 5 | Observability: Prometheus metrics, JSON logs | Built; waiting on CI |
-| 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Not started |
+| 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Tooling built; no results yet |
 | 7 | Architecture diagram, design decisions, benchmarks | Not started |
 
 ## Quickstart
@@ -276,6 +276,34 @@ were counted as `unmatched`, and logged without their route: the route was
 recorded inside the proxy handler, which a refused request never reaches.
 It is now recorded first, before the limiter, the body limit or the
 breaker can turn the request away.
+
+## Load testing
+
+`bench/run.py` measures the gateway with `cmd/loadgen`, a small open-loop
+load generator: request *i* is due at start + *i*/rate whether or not
+earlier ones have finished, and its latency counts from when it was due. A
+closed-loop tool (send, wait, send) slows down when the server does and so
+under-reports exactly the bad latency (coordinated omission); a test checks
+that loadgen reports the queueing a slow server causes. It runs inside the
+Compose network, so Docker Desktop's port forwarding is not part of the
+measurement.
+
+It compares three targets at 500, 2,000 and 4,000 requests per second: the
+echo backend directly, the gateway, and the gateway with the Redis rate
+limiter on (at a limit far above the load, so only its cost is added). Then
+a rate-limit accuracy test: one key at 300 requests/s for 10 s, alternating
+between both replicas, against 50/s with a burst of 50, which should let
+exactly 550 through. Every configuration runs in a forward and a reverse
+pass; the runner refuses to start while the host is swapping and marks any
+run during which it swapped in.
+
+```bash
+python3 bench/run.py      # about 10 minutes
+```
+
+**Status: no results yet.** A short trial confirmed the runner works, but it
+ran on a laptop that was swapping, so its numbers are not reported. The
+measurement waits for a quiet machine.
 
 ## The server itself
 

@@ -1,0 +1,22 @@
+{
+  "default_timeout": "5s",
+  "backends": {
+    "users": {
+      "url": "http://users-1:9000",
+      "retries": 1
+    }
+  },
+  "routes": [
+    {
+      "match": "GET /users/{id}",
+      "backend": "users"
+    }
+  ],
+  "rate_limit": {
+    "requests_per_second": 1000000,
+    "burst": 1000000,
+    "store": "redis",
+    "redis_url": "redis://redis:6379/0",
+    "on_store_error": "allow"
+  }
+}

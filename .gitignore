@@ -1,2 +1,3 @@
 bin/
 .DS_Store
+bench/results/*/loadgen-*.log

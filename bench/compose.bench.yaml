@@ -1,0 +1,17 @@
+# Layered over compose.yaml by bench/run.py: lets the runner swap the
+# gateway's config per scenario, and adds the load generator.
+#
+#   docker compose -f compose.yaml -f bench/compose.bench.yaml ...
+services:
+  gatekeeper:
+    volumes:
+      - ${GATEKEEPER_BENCH_CONFIG:-./config/gatekeeper.json}:/etc/gatekeeper/config.json:ro
+  gatekeeper-2:
+    volumes:
+      - ${GATEKEEPER_BENCH_CONFIG:-./config/gatekeeper.json}:/etc/gatekeeper/config.json:ro
+
+  loadgen:
+    build:
+      context: .
+      target: loadgen
+    profiles: ["bench"]
