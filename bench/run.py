@@ -14,7 +14,8 @@ forwarding is not measured) against three targets at each rate:
 then a rate-limit accuracy test: one API key at 300 requests/s for 10 s,
 alternating between both replicas, against a limit of 50/s with a burst of
 50 (bench/configs/accuracy.json). The limit should let exactly
-burst + rate x seconds through, wherever the requests land.
+burst + rate x (time from the first request to the last) through, in whole
+requests, wherever the requests land: 549.
 
 Method, from the SurgiServe benchmark: every (target, rate) runs twice, in
 a forward and then a reverse pass, so a laptop that slows as it warms up
@@ -118,7 +119,10 @@ def accuracy(stack: Stack, run_pass: int) -> dict:
     out1, in1 = host_swap_mb()
     allowed = res["statuses"].get("200", 0)
     refused = res["statuses"].get("429", 0)
-    expected = 50 + 50 * 10  # burst + rate x the 10 s the load was sent for
+    # The bucket starts full and refills from the first request to the last,
+    # (requests - 1) / 300 s, not 10 s: burst + rate x that span, in whole
+    # requests. (Until 2026-10-06 this said 550; the right answer is 549.)
+    expected = int(50 + 50 * (res["requests"] - 1) / 300)
     out = {
         "pass": run_pass, "allowed": allowed, "refused": refused, "errors": res["errors"],
         "requests": res["requests"], "expected_allowed": expected,

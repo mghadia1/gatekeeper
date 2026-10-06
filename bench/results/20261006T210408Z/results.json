@@ -1,0 +1,630 @@
+{
+  "environment": {
+    "date": "2026-10-06T21:10:59+00:00",
+    "git_commit": "049470c",
+    "machine": "Mac14,2",
+    "chip": "Apple M2",
+    "memory_gb": 8.0,
+    "macos": "26.5.2",
+    "docker_vm": {
+      "cpus": 8,
+      "memory_gb": 3.8
+    }
+  },
+  "settings": {
+    "duration_s": 15,
+    "warmup_s": 3,
+    "rates": [
+      500,
+      2000,
+      4000
+    ],
+    "order": "forward pass, then reverse pass"
+  },
+  "summary": [
+    {
+      "target": "direct",
+      "rate": 500,
+      "p50_ms_by_pass": [
+        0.824,
+        1.187
+      ],
+      "p99_ms_by_pass": [
+        2.784,
+        2.607
+      ],
+      "p50_ms": 1.006,
+      "p99_ms": 2.696,
+      "achieved_rate": 500.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "direct",
+      "rate": 2000,
+      "p50_ms_by_pass": [
+        1.095,
+        0.997
+      ],
+      "p99_ms_by_pass": [
+        9.488,
+        6.681
+      ],
+      "p50_ms": 1.046,
+      "p99_ms": 8.085,
+      "achieved_rate": 1999.9,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "direct",
+      "rate": 4000,
+      "p50_ms_by_pass": [
+        0.9,
+        0.743
+      ],
+      "p99_ms_by_pass": [
+        10.689,
+        7.033
+      ],
+      "p50_ms": 0.822,
+      "p99_ms": 8.861,
+      "achieved_rate": 3999.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "gateway",
+      "rate": 500,
+      "p50_ms_by_pass": [
+        1.27,
+        1.463
+      ],
+      "p99_ms_by_pass": [
+        3.743,
+        117.224
+      ],
+      "p50_ms": 1.367,
+      "p99_ms": 60.483,
+      "achieved_rate": 500.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "gateway",
+      "rate": 2000,
+      "p50_ms_by_pass": [
+        1.03,
+        1.055
+      ],
+      "p99_ms_by_pass": [
+        3.605,
+        7.219
+      ],
+      "p50_ms": 1.042,
+      "p99_ms": 5.412,
+      "achieved_rate": 2000.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "gateway",
+      "rate": 4000,
+      "p50_ms_by_pass": [
+        0.814,
+        0.715
+      ],
+      "p99_ms_by_pass": [
+        3.514,
+        7.236
+      ],
+      "p50_ms": 0.764,
+      "p99_ms": 5.375,
+      "achieved_rate": 3999.6,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "gateway+limit",
+      "rate": 500,
+      "p50_ms_by_pass": [
+        1.596,
+        1.542
+      ],
+      "p99_ms_by_pass": [
+        4.149,
+        20.955
+      ],
+      "p50_ms": 1.569,
+      "p99_ms": 12.552,
+      "achieved_rate": 500.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "gateway+limit",
+      "rate": 2000,
+      "p50_ms_by_pass": [
+        1.012,
+        0.894
+      ],
+      "p99_ms_by_pass": [
+        3.307,
+        3.211
+      ],
+      "p50_ms": 0.953,
+      "p99_ms": 3.259,
+      "achieved_rate": 2000.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    },
+    {
+      "target": "gateway+limit",
+      "rate": 4000,
+      "p50_ms_by_pass": [
+        0.371,
+        0.37
+      ],
+      "p99_ms_by_pass": [
+        9.053,
+        2.292
+      ],
+      "p50_ms": 0.37,
+      "p99_ms": 5.673,
+      "achieved_rate": 4000.0,
+      "non_200": 0,
+      "dropped": 0,
+      "all_valid": true
+    }
+  ],
+  "runs": [
+    {
+      "target_rate": 500,
+      "achieved_rate": 500.0417032113589,
+      "requests": 7500,
+      "statuses": {
+        "200": 7500
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 11.971,
+        "p50": 0.824,
+        "p90": 1.815,
+        "p99": 2.784,
+        "p999": 6.327
+      },
+      "target": "direct",
+      "rate": 500,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 8.6,
+      "valid": true
+    },
+    {
+      "target_rate": 2000,
+      "achieved_rate": 2000.0177213570219,
+      "requests": 30000,
+      "statuses": {
+        "200": 30000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 20.799,
+        "p50": 1.095,
+        "p90": 2.249,
+        "p99": 9.488,
+        "p999": 16.476
+      },
+      "target": "direct",
+      "rate": 2000,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 1.2,
+      "valid": true
+    },
+    {
+      "target_rate": 4000,
+      "achieved_rate": 3998.060472098345,
+      "requests": 60000,
+      "statuses": {
+        "200": 60000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 29.59,
+        "p50": 0.9,
+        "p90": 2.257,
+        "p99": 10.689,
+        "p999": 18.517
+      },
+      "target": "direct",
+      "rate": 4000,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 11.8,
+      "valid": true
+    },
+    {
+      "target_rate": 500,
+      "achieved_rate": 500.02183402007387,
+      "requests": 7500,
+      "statuses": {
+        "200": 7500
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 11.263,
+        "p50": 1.27,
+        "p90": 2.514,
+        "p99": 3.743,
+        "p999": 7.094
+      },
+      "target": "gateway",
+      "rate": 500,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 2.7,
+      "valid": true
+    },
+    {
+      "target_rate": 2000,
+      "achieved_rate": 1999.976210416309,
+      "requests": 30000,
+      "statuses": {
+        "200": 30000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 20.188,
+        "p50": 1.03,
+        "p90": 2.229,
+        "p99": 3.605,
+        "p999": 12.07
+      },
+      "target": "gateway",
+      "rate": 2000,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 3.8,
+      "valid": true
+    },
+    {
+      "target_rate": 4000,
+      "achieved_rate": 3999.582607825269,
+      "requests": 60000,
+      "statuses": {
+        "200": 60000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 13.439,
+        "p50": 0.814,
+        "p90": 2.03,
+        "p99": 3.514,
+        "p999": 6.637
+      },
+      "target": "gateway",
+      "rate": 4000,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 1.2,
+      "valid": true
+    },
+    {
+      "target_rate": 500,
+      "achieved_rate": 500.00992769711445,
+      "requests": 7500,
+      "statuses": {
+        "200": 7500
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 9.417,
+        "p50": 1.596,
+        "p90": 2.938,
+        "p99": 4.149,
+        "p999": 6.293
+      },
+      "target": "gateway+limit",
+      "rate": 500,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 0.1,
+      "valid": true
+    },
+    {
+      "target_rate": 2000,
+      "achieved_rate": 1999.993843485618,
+      "requests": 30000,
+      "statuses": {
+        "200": 30000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 36.404,
+        "p50": 1.012,
+        "p90": 2.071,
+        "p99": 3.307,
+        "p999": 16.642
+      },
+      "target": "gateway+limit",
+      "rate": 2000,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 0.4,
+      "valid": true
+    },
+    {
+      "target_rate": 4000,
+      "achieved_rate": 3999.982708874746,
+      "requests": 60000,
+      "statuses": {
+        "200": 60000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 74.273,
+        "p50": 0.371,
+        "p90": 1.067,
+        "p99": 9.053,
+        "p999": 57.835
+      },
+      "target": "gateway+limit",
+      "rate": 4000,
+      "pass": 1,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 1.3,
+      "valid": true
+    },
+    {
+      "target_rate": 4000,
+      "achieved_rate": 3999.9622312899555,
+      "requests": 60000,
+      "statuses": {
+        "200": 60000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 7.486,
+        "p50": 0.37,
+        "p90": 1.018,
+        "p99": 2.292,
+        "p999": 3.178
+      },
+      "target": "gateway+limit",
+      "rate": 4000,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 0.5,
+      "valid": true
+    },
+    {
+      "target_rate": 2000,
+      "achieved_rate": 1999.9991490670286,
+      "requests": 30000,
+      "statuses": {
+        "200": 30000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 15.987,
+        "p50": 0.894,
+        "p90": 2.016,
+        "p99": 3.211,
+        "p999": 5.968
+      },
+      "target": "gateway+limit",
+      "rate": 2000,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 3.1,
+      "valid": true
+    },
+    {
+      "target_rate": 500,
+      "achieved_rate": 499.97456352742745,
+      "requests": 7500,
+      "statuses": {
+        "200": 7500
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 70.967,
+        "p50": 1.542,
+        "p90": 3.011,
+        "p99": 20.955,
+        "p999": 60.482
+      },
+      "target": "gateway+limit",
+      "rate": 500,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 16.4,
+      "valid": true
+    },
+    {
+      "target_rate": 4000,
+      "achieved_rate": 3999.6387526278627,
+      "requests": 60000,
+      "statuses": {
+        "200": 60000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 94.141,
+        "p50": 0.715,
+        "p90": 1.989,
+        "p99": 7.236,
+        "p999": 61.705
+      },
+      "target": "gateway",
+      "rate": 4000,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 7.9,
+      "valid": true
+    },
+    {
+      "target_rate": 2000,
+      "achieved_rate": 1999.9498612569782,
+      "requests": 30000,
+      "statuses": {
+        "200": 30000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 89.122,
+        "p50": 1.055,
+        "p90": 2.281,
+        "p99": 7.219,
+        "p999": 58.529
+      },
+      "target": "gateway",
+      "rate": 2000,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 4.5,
+      "valid": true
+    },
+    {
+      "target_rate": 500,
+      "achieved_rate": 500.04159065927814,
+      "requests": 7500,
+      "statuses": {
+        "200": 7500
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 207.551,
+        "p50": 1.463,
+        "p90": 2.916,
+        "p99": 117.224,
+        "p999": 188.477
+      },
+      "target": "gateway",
+      "rate": 500,
+      "pass": 2,
+      "host_swapped_out_mb": 122.7,
+      "host_swapped_in_mb": 17.6,
+      "valid": true
+    },
+    {
+      "target_rate": 4000,
+      "achieved_rate": 3999.851236732833,
+      "requests": 60000,
+      "statuses": {
+        "200": 60000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 22.143,
+        "p50": 0.743,
+        "p90": 2.104,
+        "p99": 7.033,
+        "p999": 16.03
+      },
+      "target": "direct",
+      "rate": 4000,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 3.1,
+      "valid": true
+    },
+    {
+      "target_rate": 2000,
+      "achieved_rate": 1999.8548761312327,
+      "requests": 30000,
+      "statuses": {
+        "200": 30000
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 25.701,
+        "p50": 0.997,
+        "p90": 2.339,
+        "p99": 6.681,
+        "p999": 18.46
+      },
+      "target": "direct",
+      "rate": 2000,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 1.1,
+      "valid": true
+    },
+    {
+      "target_rate": 500,
+      "achieved_rate": 500.0271859114006,
+      "requests": 7500,
+      "statuses": {
+        "200": 7500
+      },
+      "errors": 0,
+      "dropped": 0,
+      "latency_ms": {
+        "max": 4.737,
+        "p50": 1.187,
+        "p90": 1.567,
+        "p99": 2.607,
+        "p999": 3.395
+      },
+      "target": "direct",
+      "rate": 500,
+      "pass": 2,
+      "host_swapped_out_mb": 0.0,
+      "host_swapped_in_mb": 2.3,
+      "valid": true
+    }
+  ],
+  "accuracy": [
+    {
+      "pass": 1,
+      "allowed": 549,
+      "refused": 2451,
+      "errors": 0,
+      "requests": 3000,
+      "expected_allowed": 550,
+      "error_percent": -0.18,
+      "wall_seconds": 10.32,
+      "host_swapped_in_mb": 0.1,
+      "valid": true
+    },
+    {
+      "pass": 2,
+      "allowed": 549,
+      "refused": 2451,
+      "errors": 0,
+      "requests": 3000,
+      "expected_allowed": 550,
+      "error_percent": -0.18,
+      "wall_seconds": 10.33,
+      "host_swapped_in_mb": 0.1,
+      "valid": true
+    }
+  ]
+}

@@ -44,5 +44,11 @@ matters more than usual; and Go stays off the resume until the ramp's gate
 
 12. "One API key across two replicas got exactly 10 of 60 requests": where
     does that come from, and why is 10 the right number?
-13. The load test has no committed results yet. Why not, and what would
-    make a run trustworthy? (Hint: SurgiServe's benchmark history.)
+13. The rate-limit accuracy test let 549 requests through, and the runner
+    expected 550. Which one was wrong, and why is 549 the right number?
+14. Why does the load test report no figure for the gateway's added
+    latency, and no p99? What in `bench/RESULTS.md` rules each one out,
+    and what setup would let you measure them?
+15. At 4,000/s the gateway with the Redis limiter had a lower median than
+    calling the backend directly. What was tested, what did it rule out,
+    and how would you answer "so why was it faster?" in an interview?

@@ -1,3 +1,4 @@
 bin/
 .DS_Store
 bench/results/*/loadgen-*.log
+__pycache__/

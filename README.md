@@ -5,11 +5,13 @@ backend services that routes requests, spreads load across healthy
 instances, rate-limits clients, survives backend failures, and shows what it
 is doing through metrics.
 
-> **Status:** Milestones 0-5 of 7. It routes requests from a config file,
+> **Status:** Milestones 0-7 of 7. It routes requests from a config file,
 > spreads them across a backend's healthy instances, rate-limits each client
 > with a limit shared by every gateway replica, retries safely, stops
-> sending traffic to a failing backend, and exports Prometheus metrics. The
-> load test is planned, not built.
+> sending traffic to a failing backend, and exports Prometheus metrics. One
+> laptop load test is recorded: the shared rate limit was exact, and 4,000
+> requests/s went through without errors; the gateway's added latency was
+> too small for that laptop to measure.
 
 ## Status
 
@@ -21,8 +23,8 @@ is doing through metrics.
 | 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Done |
 | 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Done |
 | 5 | Observability: Prometheus metrics, JSON logs | Done |
-| 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Tooling built; no results yet |
-| 7 | Architecture diagram, design decisions, benchmarks | Diagram, decisions and failures written; benchmarks wait on Milestone 6 |
+| 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Done, on one laptop: accuracy exact, 4,000/s without errors; overhead below what the laptop resolves ([bench/RESULTS.md](bench/RESULTS.md)) |
+| 7 | Architecture diagram, design decisions, benchmarks | Done |
 
 ## Quickstart
 
@@ -332,7 +334,8 @@ echo backend directly, the gateway, and the gateway with the Redis rate
 limiter on (at a limit far above the load, so only its cost is added). Then
 a rate-limit accuracy test: one key at 300 requests/s for 10 s, alternating
 between both replicas, against 50/s with a burst of 50, which should let
-exactly 550 through. Every configuration runs in a forward and a reverse
+exactly 549 through (the burst, plus 50/s over the 9.997 s from the first
+request to the last). Every configuration runs in a forward and a reverse
 pass; the runner refuses to start while the host is swapping and marks any
 run during which it swapped in.
 
@@ -340,9 +343,29 @@ run during which it swapped in.
 python3 bench/run.py      # about 10 minutes
 ```
 
-**Status: no results yet.** A short trial confirmed the runner works, but it
-ran on a laptop that was swapping, so its numbers are not reported. The
-measurement waits for a quiet machine.
+### Results
+
+One run on 2026-10-06: a MacBook Air M2 with 8 GB, Docker Desktop, the
+load generator on the same laptop. Every run passed the swap check. Full
+numbers and reasoning are in [bench/RESULTS.md](bench/RESULTS.md).
+
+- **The shared limit is exact.** 549 allowed and 2,451 refused, in both
+  runs, across two replicas: what one bucket allows, with no request to
+  spare.
+- **4,000 requests/s with no errors.** At 500, 2,000 and 4,000/s, through
+  the gateway with and without the Redis limiter, all 195,000 measured
+  requests per target got a 200, none dropped. Higher rates were not tried,
+  so this is a floor, not a maximum.
+- **The gateway's added latency is not measurable here.** Medians were
+  0.7-1.5 ms through the gateway (0.4-1.6 with the limiter) and 0.7-1.2 ms
+  direct, but the direct path alone varied by 0.37 ms between two passes,
+  as much as the difference.
+  No overhead figure is claimed. p99 is not claimed either: it swung from
+  3.7 to 117 ms between passes of the same configuration.
+- **One result is unexplained.** At 4,000/s the gateway *with* the limiter
+  had a 0.37 ms median in both passes, faster than without it and faster
+  than calling the backend directly. One explanation (idle CPUs being slow
+  to wake) was tested with `bench/idle_check.py` and did not hold up.
 
 ## Design decisions
 
@@ -367,8 +390,8 @@ measurement waits for a quiet machine.
 
 ## Failures found while building it
 
-Each was caught by a test, `-race`, or reading the code, fixed, and covered
-by a test where one could be written:
+Each was caught by a test, `-race`, reading the code or checking a result
+by hand, fixed, and covered by a test where one could be written:
 
 1. **A catch-all 404 turned every 405 into a 404.** ServeMux answers 405
    only when no pattern matches the path; the JSON fallback matched
@@ -393,6 +416,11 @@ by a test where one could be written:
    recorded inside the proxy handler, which a refused request never reaches,
    so metrics and logs lost it. Route labels are now applied first.
    (Milestone 5, a metrics test.)
+7. **The accuracy check expected one request too many.** The runner
+   expected 550 (burst + 50/s x 10 s), and the limiter allowed 549 in both
+   runs. The limiter was right: refill runs from the first request to the
+   last, 9.997 s, not 10. The formula is fixed. (Milestone 6, checking the
+   result by hand.)
 
 ## The server itself
 

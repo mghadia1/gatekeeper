@@ -1,0 +1,18 @@
+bench/idle_check.py, run right after this folder's benchmark (2026-10-06,
+commit 049470c plus the uncommitted script; same stack, same laptop).
+Output copied from the terminal:
+
+round 1, busy loop off:
+  direct          4000/s pass 1: p50    0.70 ms  p99     8.99 ms  ok 60000/60000  errors 0  dropped 0  swap-in 0.1 MB
+round 1, busy loop on:
+  direct          4000/s pass 1: p50    0.90 ms  p99     2.24 ms  ok 60000/60000  errors 0  dropped 0  swap-in 17.4 MB
+round 2, busy loop off:
+  direct          4000/s pass 2: p50    0.68 ms  p99     6.61 ms  ok 60000/60000  errors 0  dropped 0  swap-in 0.0 MB
+round 2, busy loop on:
+  direct          4000/s pass 2: p50    0.90 ms  p99     2.24 ms  ok 60000/60000  errors 0  dropped 0  swap-in 0.0 MB
+
+round  busy-loop  p50 ms  p99 ms  valid
+    1  off          0.70    8.99  True
+    1  on           0.90    2.24  True
+    2  off          0.68    6.61  True
+    2  on           0.90    2.24  True
