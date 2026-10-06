@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mghadia1/gatekeeper/internal/balancer"
+	"github.com/mghadia1/gatekeeper/internal/resilience"
 )
 
 const requestIDHeader = "X-Request-ID"
@@ -35,6 +36,9 @@ type requestInfo struct {
 	instance    *balancer.Instance
 	client      string // the rate limit key: a hashed API key or an IP
 	rateLimited bool
+	attempts    int                // tries at the backend, retries included
+	outcome     resilience.Outcome // for the circuit breaker
+	breakerOpen bool
 	status      int // overrides the written status (only for 499)
 	err         error
 }
@@ -110,6 +114,12 @@ func withAccessLog(next http.Handler, logger *slog.Logger) http.Handler {
 		}
 		if info.rateLimited {
 			attrs = append(attrs, slog.Bool("rate_limited", true))
+		}
+		if info.attempts > 1 {
+			attrs = append(attrs, slog.Int("attempts", info.attempts))
+		}
+		if info.breakerOpen {
+			attrs = append(attrs, slog.Bool("circuit_open", true))
 		}
 		if info.err != nil {
 			attrs = append(attrs, slog.String("error", info.err.Error()))

@@ -5,10 +5,11 @@ backend services that routes requests, spreads load across healthy
 instances, rate-limits clients, survives backend failures, and shows what it
 is doing through metrics.
 
-> **Status:** Milestones 0-3 of 7. It routes requests from a config file,
-> spreads them across a backend's healthy instances, and rate-limits each
-> client with a limit shared by every gateway replica. Circuit breakers,
-> retries, metrics and the load test are planned, not built.
+> **Status:** Milestones 0-4 of 7. It routes requests from a config file,
+> spreads them across a backend's healthy instances, rate-limits each client
+> with a limit shared by every gateway replica, retries safely, and stops
+> sending traffic to a failing backend. Metrics and the load test are
+> planned, not built.
 
 ## Status
 
@@ -18,7 +19,7 @@ is doing through metrics.
 | 1 | Routing: config file, method + path-pattern matching, reverse proxy, request IDs, timeouts | Built; waiting on CI |
 | 2 | Load balancing, active health checks, passive failure detection | Built; waiting on CI |
 | 3 | Rate limiting: token bucket per client, shared across replicas through Redis | Built; waiting on CI |
-| 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Not started |
+| 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Built; waiting on CI |
 | 5 | Observability: Prometheus metrics, JSON logs | Not started |
 | 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Not started |
 | 7 | Architecture diagram, design decisions, benchmarks | Not started |
@@ -60,6 +61,7 @@ a JSON description of what reached it): `users` with two instances, and
     {"match": "/api/orders/", "backend": "orders", "strip_prefix": "/api"},
     {"match": "GET /slow", "backend": "users-strict"}
   ],
+  "max_body_bytes": 1048576,
   "rate_limit": {
     "requests_per_second": 5, "burst": 10,
     "key_header": "X-API-Key",
@@ -75,8 +77,11 @@ a JSON description of what reached it): `users` with two instances, and
   (`GET /users/me` beats `GET /users/{id}`).
 - `strip_prefix` is removed from the path before forwarding.
 - `timeout` bounds the whole exchange with that backend.
-- `url` for one instance or `urls` for several; `health_check` and
-  `eject_after` / `eject_for` are explained under [Load balancing](#load-balancing).
+- `url` for one instance or `urls` for several (all with the same path);
+  `health_check` and `eject_after` / `eject_for` are explained under
+  [Load balancing](#load-balancing); `retries` (default 1) and
+  `circuit_breaker` under [Resilience](#resilience).
+- `max_body_bytes` (default 10 MiB) caps request bodies.
 - Unknown fields, unknown backends, non-HTTP URLs, non-positive timeouts and
   conflicting routes all stop the gateway at startup, with the file and the
   problem named.
@@ -130,8 +135,8 @@ Measured in the tests: with one of two instances dead and no health checks,
 exactly `eject_after` requests fail (2 of 40) before passive detection takes
 it out; the rest succeed. With health checks, the smoke test stops `users-2`,
 and after 3 s all requests go to `users-1` with none failing; restarted, it
-is back in rotation. There are no retries yet, so a request already sent to
-a dying instance fails (retries come in Milestone 4).
+is back in rotation. That was before retries (Milestone 4); with them, the
+smoke test now sees no failures at all when an instance stops.
 
 **A bug caught before it shipped.** The health checks run beside the server
 and must stop with it. The first version waited for them in a `defer`
@@ -183,6 +188,50 @@ off (`MaxRetries` is `-1`; `0` means "use the default"), plus the 1 s
 skip, and a test requires each request during an outage to finish in under
 300 ms. go-redis also printed its own plain-text log lines; they now go
 through the gateway's JSON logger.
+
+## Resilience
+
+**Retries, to a different instance, only when safe.** A request is retried
+(up to the backend's `retries`) when its instance fails to connect, times
+out or answers `503`, and only if:
+
+- it has no body (a body cannot be sent twice), and
+- its method is safe (`GET`, `HEAD`, `OPTIONS`), or the connection never
+  opened, so the backend cannot have seen it. A bodyless `POST` whose
+  connection was refused is retried; one that got a `503` is not.
+
+All attempts share the backend's one timeout.
+
+**A retry budget.** Retries may add at most 20% to a backend's traffic over
+the last 10 s, plus 3 per second. Without a cap, an outage doubles or
+triples the load on a backend that is already failing (a retry storm).
+Measured: 100 requests, every attempt failing, 5 retries allowed: the
+backends saw **150 attempts**, exactly the budget (100 + 20 + 3/s for 10 s),
+instead of 600.
+
+**A circuit breaker per backend** (`circuit_breaker`). When at least
+`min_requests` requests in the last 10 s have finished and `failure_ratio`
+of them failed (connection errors, timeouts, 503s, after retries), it opens:
+requests get an immediate `503` with `Retry-After` instead of each waiting
+out the timeout. After `open_for`, one probe goes through: success closes
+the circuit, failure reopens it. This is separate from ejecting a bad
+instance (the balancer's job); it is for a whole backend failing. Measured:
+20 requests against an open circuit were refused in about 2 ms in total.
+
+**Body size limit.** A declared `Content-Length` over `max_body_bytes` gets
+`413` before anything is read; a chunked body is cut off at the limit as it
+streams, also `413`.
+
+From the smoke test: stopping `users-2` and sending 10 requests at once
+gave 10 successes (requests that hit it were retried on `users-1`);
+stopping `orders` gave five `502`s and then `503`s from the open circuit;
+bringing it back closed the circuit after one probe; a 2 MB upload got
+`413`.
+
+**A gap found while building it.** A `Config` built in code rather than
+parsed from a file has a body limit of 0, and the first version took that
+literally: every request with a body got `413`. An older test caught it.
+Zero now means the default.
 
 ## The server itself
 

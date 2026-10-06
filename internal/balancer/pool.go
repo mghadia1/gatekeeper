@@ -109,6 +109,32 @@ func (p *Pool) Pick() *Instance {
 	return p.instances[start%n] // fail open
 }
 
+// PickExcept is Pick for a retry: the next healthy instance other than skip,
+// or any other instance if none is healthy, or skip itself if it is the
+// only one.
+func (p *Pool) PickExcept(skip *Instance) *Instance {
+	n := uint64(len(p.instances))
+	if n == 1 {
+		return p.instances[0]
+	}
+	now := p.opts.Now()
+	start := p.next.Add(1) - 1
+	var fallback *Instance
+	for i := range n {
+		inst := p.instances[(start+i)%n]
+		if inst == skip {
+			continue
+		}
+		if inst.Healthy(now) {
+			return inst
+		}
+		if fallback == nil {
+			fallback = inst
+		}
+	}
+	return fallback
+}
+
 // Healthy reports whether the instance should take traffic at time now.
 func (inst *Instance) Healthy(now time.Time) bool {
 	inst.mu.Lock()

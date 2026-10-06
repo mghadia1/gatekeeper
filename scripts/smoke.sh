@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Checks a running Compose stack from outside, over real HTTP: health,
 # routing, prefix stripping, request ids, 404/405, 502, 504, load balancing
-# across two instances, losing and regaining one, a rate limit shared by two
-# gateway replicas, failing open when Redis is down, and a clean SIGTERM
-# shutdown.
+# across two instances, losing one with no failed requests (retries) and
+# regaining it, a rate limit shared by two gateway replicas, failing open
+# when Redis is down, the circuit breaker opening and closing, the body
+# size limit, and a clean SIGTERM shutdown.
 set -euo pipefail
 base_url="${BASE_URL:-http://localhost:8080}"
 second_url="${SECOND_URL:-http://localhost:8081}"
@@ -77,14 +78,32 @@ docker compose stop --timeout 5 redis >/dev/null
 expect "Redis down: fails open" "$(command curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: smoke-shared-key' "$base_url/users/1")" "200"
 docker compose start redis >/dev/null
 
-# Lose an instance: health checks (every 1 s, 2 failures) take it out, and
-# passive detection covers the gap; nothing is retried yet (Milestone 4).
+# Lose an instance. Straight away, before any health check notices, a
+# request sent to users-2 fails to connect and is retried on users-1, so no
+# client sees an error. After that, health checks keep it out of rotation.
 docker compose stop --timeout 5 users-2 >/dev/null
+expect "users-2 just stopped: no failures" "$(instances 10)" "users-1=10 "
 sleep 3
 expect "with users-2 stopped" "$(instances 10)" "users-1=10 "
 docker compose start users-2 >/dev/null
 sleep 4
 expect "users-2 back in rotation" "$(instances 10)" "users-1=5 users-2=5 "
+
+# The body size limit (1 MiB in config/gatekeeper.json).
+big="$(mktemp)"; head -c 2000000 /dev/zero > "$big"
+expect "2 MB upload" "$(status -X POST --data-binary "@$big" "$base_url/users")" "413"
+rm -f "$big"
+
+# The circuit breaker on orders: stop it, and after 5 failed requests (at a
+# 50% failure ratio) the gateway stops trying and answers 503 at once.
+docker compose stop --timeout 5 orders >/dev/null
+codes="$(for _ in $(seq 8); do status "$base_url/api/orders/1"; echo; done | tr '\n' ' ')"
+expect "orders down: 502 x5, then circuit open" "$codes" "502 502 502 502 502 503 503 503 "
+expect "open circuit sends Retry-After" "$(curl -s -D - -o /dev/null "$base_url/api/orders/1" | grep -ci '^retry-after:')" "1"
+docker compose start orders >/dev/null
+sleep 4   # open_for is 3 s; then one probe, which succeeds and closes it
+expect "orders back: circuit closes" "$(status "$base_url/api/orders/1")" "200"
+expect "and stays closed" "$(status "$base_url/api/orders/2")" "200"
 
 docker compose stop --timeout 15 gatekeeper >/dev/null
 code="$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -a -q gatekeeper)")"

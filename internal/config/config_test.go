@@ -100,6 +100,36 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
+func TestRetriesBreakerAndBodyLimit(t *testing.T) {
+	cfg, err := Parse([]byte(`{
+	  "max_body_bytes": 1024,
+	  "backends": {
+	    "a": {"url": "http://a", "retries": 2, "circuit_breaker": {"min_requests": 5}},
+	    "b": {"url": "http://b", "retries": 0}
+	  },
+	  "routes": [{"match": "/", "backend": "a"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := cfg.Backends["a"], cfg.Backends["b"]
+	if a.Retries != 2 || b.Retries != 0 {
+		t.Errorf("retries = %d / %d, want 2 / 0 (0 is allowed: no retries)", a.Retries, b.Retries)
+	}
+	want := CircuitBreaker{FailureRatio: 0.5, MinRequests: 5, OpenFor: 5 * time.Second}
+	if a.CircuitBreaker == nil || *a.CircuitBreaker != want || b.CircuitBreaker != nil {
+		t.Errorf("breakers = %+v / %+v, want %+v / none", a.CircuitBreaker, b.CircuitBreaker, want)
+	}
+	if cfg.MaxBodyBytes != 1024 {
+		t.Errorf("max body = %d, want 1024", cfg.MaxBodyBytes)
+	}
+
+	cfg, _ = Parse([]byte(`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}]}`))
+	if cfg.MaxBodyBytes != DefaultMaxBodyBytes || cfg.Backends["a"].Retries != DefaultRetries {
+		t.Errorf("defaults: max body %d, retries %d", cfg.MaxBodyBytes, cfg.Backends["a"].Retries)
+	}
+}
+
 func TestBuiltInDefaultTimeout(t *testing.T) {
 	cfg, err := Parse([]byte(`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}]}`))
 	if err != nil {
@@ -167,6 +197,18 @@ func TestParseRejects(t *testing.T) {
 		},
 		"bad on_store_error": {
 			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}], "rate_limit": {"requests_per_second": 1, "burst": 1, "on_store_error": "maybe"}}`, "allow or deny",
+		},
+		"urls with different paths": {
+			`{"backends": {"a": {"urls": ["http://a/v1", "http://b/v2"]}}, "routes": [{"match": "/", "backend": "a"}]}`, "same path",
+		},
+		"negative retries": {
+			`{"backends": {"a": {"url": "http://a", "retries": -1}}, "routes": [{"match": "/", "backend": "a"}]}`, "retries",
+		},
+		"bad failure ratio": {
+			`{"backends": {"a": {"url": "http://a", "circuit_breaker": {"failure_ratio": 1.5}}}, "routes": [{"match": "/", "backend": "a"}]}`, "failure_ratio",
+		},
+		"zero body limit": {
+			`{"max_body_bytes": 0, "backends": {"a": {"url": "http://a"}}, "routes": [{"match": "/", "backend": "a"}]}`, "max_body_bytes",
 		},
 		"empty match": {
 			`{"backends": {"a": {"url": "http://a"}}, "routes": [{"match": " ", "backend": "a"}]}`, "match is empty",

@@ -1,5 +1,6 @@
 {
   "default_timeout": "5s",
+  "max_body_bytes": 1048576,
   "backends": {
     "users": {
       "urls": [
@@ -14,14 +15,20 @@
         "healthy_after": 2
       },
       "eject_after": 3,
-      "eject_for": "10s"
+      "eject_for": "10s",
+      "retries": 1
     },
     "users-strict": {
       "url": "http://users-1:9000",
       "timeout": "500ms"
     },
     "orders": {
-      "url": "http://orders:9000"
+      "url": "http://orders:9000",
+      "circuit_breaker": {
+        "failure_ratio": 0.5,
+        "min_requests": 5,
+        "open_for": "3s"
+      }
     },
     "offline": {
       "url": "http://127.0.0.1:9"

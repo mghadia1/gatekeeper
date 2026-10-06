@@ -43,7 +43,12 @@ type Config struct {
 	Backends map[string]Backend
 	// RateLimit is nil when clients are not rate-limited.
 	RateLimit *RateLimit
+	// MaxBodyBytes is the largest request body accepted (413 above it).
+	MaxBodyBytes int64
 }
+
+// DefaultMaxBodyBytes applies when max_body_bytes is not set.
+const DefaultMaxBodyBytes = 10 << 20
 
 // RateLimit limits each client to a token bucket.
 type RateLimit struct {
@@ -78,7 +83,29 @@ type Backend struct {
 	// instance is taken out of rotation for EjectFor.
 	EjectAfter int
 	EjectFor   time.Duration
+
+	// Retries is how many times a failed request may be retried on another
+	// instance, when that is safe (see the gateway package).
+	Retries int
+	// CircuitBreaker is nil when the backend has none.
+	CircuitBreaker *CircuitBreaker
 }
+
+// CircuitBreaker opens when FailureRatio of at least MinRequests requests in
+// the last ten seconds failed, refuses requests for OpenFor, then probes.
+type CircuitBreaker struct {
+	FailureRatio float64
+	MinRequests  int
+	OpenFor      time.Duration
+}
+
+// Defaults for retries and for circuit_breaker fields left out.
+const (
+	DefaultRetries      = 1
+	DefaultFailureRatio = 0.5
+	DefaultMinRequests  = 20
+	DefaultOpenFor      = 5 * time.Second
+)
 
 // HealthCheck configures active checks of each instance.
 type HealthCheck struct {
@@ -105,6 +132,7 @@ type file struct {
 	Backends       map[string]fileBackend `json:"backends"`
 	Routes         []fileRoute            `json:"routes"`
 	RateLimit      *fileRateLimit         `json:"rate_limit"`
+	MaxBodyBytes   *int64                 `json:"max_body_bytes"`
 }
 
 type fileRateLimit struct {
@@ -123,6 +151,14 @@ type fileBackend struct {
 	HealthCheck *fileHealthCheck `json:"health_check"`
 	EjectAfter  int              `json:"eject_after"`
 	EjectFor    string           `json:"eject_for"`
+	Retries     *int             `json:"retries"`
+	Breaker     *fileBreaker     `json:"circuit_breaker"`
+}
+
+type fileBreaker struct {
+	FailureRatio float64 `json:"failure_ratio"`
+	MinRequests  int     `json:"min_requests"`
+	OpenFor      string  `json:"open_for"`
 }
 
 type fileHealthCheck struct {
@@ -178,7 +214,14 @@ func Parse(data []byte) (Config, error) {
 		}
 	}
 
-	cfg := Config{Backends: map[string]Backend{}}
+	cfg := Config{Backends: map[string]Backend{}, MaxBodyBytes: DefaultMaxBodyBytes}
+	if f.MaxBodyBytes != nil {
+		if *f.MaxBodyBytes < 1 {
+			problems = append(problems, errors.New("max_body_bytes must be at least 1"))
+		} else {
+			cfg.MaxBodyBytes = *f.MaxBodyBytes
+		}
+	}
 	names := make([]string, 0, len(f.Backends))
 	for name := range f.Backends {
 		names = append(names, name)
@@ -270,6 +313,7 @@ func parseBackend(name string, b fileBackend, fallbackTimeout time.Duration) (Ba
 	backend := Backend{
 		Name: name, Timeout: fallbackTimeout,
 		EjectAfter: DefaultEjectAfter, EjectFor: DefaultEjectFor,
+		Retries: DefaultRetries,
 	}
 
 	raw := b.URLs
@@ -292,6 +336,14 @@ func parseBackend(name string, b fileBackend, fallbackTimeout time.Duration) (Ba
 			fail("url %q has no host", r)
 		default:
 			backend.URLs = append(backend.URLs, u)
+		}
+	}
+	// A retry goes to another instance with the same request path, so the
+	// instances must agree on where the service lives.
+	for _, u := range backend.URLs[min(1, len(backend.URLs)):] {
+		if u.Path != backend.URLs[0].Path {
+			fail("all urls must have the same path (%q vs %q)", backend.URLs[0].Path, u.Path)
+			break
 		}
 	}
 
@@ -318,6 +370,27 @@ func parseBackend(name string, b fileBackend, fallbackTimeout time.Duration) (Ba
 	duration("timeout", b.Timeout, &backend.Timeout)
 	positive("eject_after", b.EjectAfter, &backend.EjectAfter)
 	duration("eject_for", b.EjectFor, &backend.EjectFor)
+
+	if b.Retries != nil {
+		if *b.Retries < 0 {
+			fail("retries must be 0 or more")
+		} else {
+			backend.Retries = *b.Retries
+		}
+	}
+	if cb := b.Breaker; cb != nil {
+		breaker := &CircuitBreaker{FailureRatio: DefaultFailureRatio, MinRequests: DefaultMinRequests, OpenFor: DefaultOpenFor}
+		if cb.FailureRatio != 0 {
+			if cb.FailureRatio <= 0 || cb.FailureRatio > 1 {
+				fail("circuit_breaker.failure_ratio must be in (0, 1]")
+			} else {
+				breaker.FailureRatio = cb.FailureRatio
+			}
+		}
+		positive("circuit_breaker.min_requests", cb.MinRequests, &breaker.MinRequests)
+		duration("circuit_breaker.open_for", cb.OpenFor, &breaker.OpenFor)
+		backend.CircuitBreaker = breaker
+	}
 
 	if hc := b.HealthCheck; hc != nil {
 		check := &HealthCheck{

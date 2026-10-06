@@ -8,14 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mghadia1/gatekeeper/internal/balancer"
 	"github.com/mghadia1/gatekeeper/internal/config"
+	"github.com/mghadia1/gatekeeper/internal/resilience"
 )
 
 // Gateway is the gateway's HTTP handler plus the background work it needs:
@@ -87,10 +90,33 @@ func New(cfg config.Config, version string, logger *slog.Logger) (*Gateway, erro
 		g.limiter = l
 	}
 
-	transport := newTransport()
+	// A Config built in code rather than parsed has no body limit set; zero
+	// must not mean "reject every body".
+	maxBodyBytes := cfg.MaxBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = config.DefaultMaxBodyBytes
+	}
+
+	// One breaker and one retry budget per backend, shared by its routes.
+	base := newTransport()
+	breakers := map[string]*resilience.Breaker{}
+	transports := map[string]http.RoundTripper{}
+	for name, backend := range cfg.Backends {
+		if cb := backend.CircuitBreaker; cb != nil {
+			breakers[name] = &resilience.Breaker{
+				FailureRatio: cb.FailureRatio, MinRequests: cb.MinRequests, OpenFor: cb.OpenFor,
+			}
+		}
+		transports[name] = &retryTransport{
+			base: base, pool: pools[name], retries: backend.Retries,
+			budget: &resilience.RetryBudget{Ratio: retryBudgetRatio, MinPerSecond: retryBudgetMinPerSecond},
+		}
+	}
+
 	for _, route := range cfg.Routes {
 		backend := cfg.Backends[route.Backend]
-		proxy := newProxy(route, backend, pools[route.Backend], transport)
+		proxy := newProxy(route, backend, pools[route.Backend], transports[route.Backend],
+			breakers[route.Backend], maxBodyBytes)
 		if g.limiter != nil {
 			proxy = g.limiter.wrap(proxy)
 		}
@@ -184,9 +210,12 @@ func newTransport() *http.Transport {
 	}
 }
 
-// newProxy forwards a route's requests to an instance of its backend, within
-// the backend's timeout, and tells the pool how the instance did.
-func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool, transport http.RoundTripper) http.Handler {
+// newProxy forwards a route's requests to its backend. In order, a request
+// meets: the body size limit, the backend's circuit breaker, the retrying
+// transport (which picks instances and reports to the pool), and the
+// backend's timeout around all of it.
+func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool,
+	transport http.RoundTripper, breaker *resilience.Breaker, maxBodyBytes int64) http.Handler {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			if route.StripPrefix != "" {
@@ -207,24 +236,19 @@ func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool, t
 			pr.Out.Header.Set(requestIDHeader, requestID(pr.In.Context()))
 		},
 		Transport: transport,
-		// The instance answered. A 503 is it saying it cannot serve, which
-		// counts against it like a connection failure; anything else, even
-		// another 5xx about this one request, counts as alive.
-		ModifyResponse: func(resp *http.Response) error {
-			info := infoFrom(resp.Request.Context())
-			if resp.StatusCode == http.StatusServiceUnavailable {
-				pool.ReportFailure(info.instance)
-			} else {
-				pool.ReportSuccess(info.instance)
-			}
-			return nil
-		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			info := infoFrom(r.Context())
+			info.err = err
+			var tooLarge *http.MaxBytesError
 			switch {
+			case errors.As(err, &tooLarge):
+				// A chunked body that turned out too big while being sent.
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+					"error":      "request body too large",
+					"limit":      tooLarge.Limit,
+					"request_id": requestID(r.Context()),
+				})
 			case errors.Is(r.Context().Err(), context.DeadlineExceeded):
-				pool.ReportFailure(info.instance)
-				info.err = err
 				writeJSON(w, http.StatusGatewayTimeout, map[string]string{
 					"error":      fmt.Sprintf("backend %q did not answer within %s", backend.Name, backend.Timeout),
 					"request_id": requestID(r.Context()),
@@ -232,11 +256,8 @@ func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool, t
 			case errors.Is(r.Context().Err(), context.Canceled):
 				// The client went away; there is no one to answer. 499 is
 				// nginx's convention for this, recorded for the log only.
-				info.err = err
 				info.status = statusClientClosedRequest
 			default:
-				pool.ReportFailure(info.instance)
-				info.err = err
 				writeJSON(w, http.StatusBadGateway, map[string]string{
 					"error":      fmt.Sprintf("backend %q is unreachable", backend.Name),
 					"request_id": requestID(r.Context()),
@@ -249,9 +270,36 @@ func newProxy(route config.Route, backend config.Backend, pool *balancer.Pool, t
 		info := infoFrom(r.Context())
 		info.route = route.Match
 		info.backend = backend.Name
+
+		if r.ContentLength > maxBodyBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error":      "request body too large",
+				"limit":      maxBodyBytes,
+				"request_id": requestID(r.Context()),
+			})
+			return
+		}
+		// Bodies without a Content-Length are cut off at the limit as they
+		// are read; the ErrorHandler turns that into a 413.
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
+		if breaker != nil {
+			allowed, retryAfter := breaker.Allow()
+			if !allowed {
+				info.breakerOpen = true
+				w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retryAfter.Seconds())))))
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error":      fmt.Sprintf("backend %q is failing; circuit open", backend.Name),
+					"request_id": requestID(r.Context()),
+				})
+				return
+			}
+			defer func() { breaker.Record(info.outcome) }()
+		}
+
 		info.instance = pool.Pick()
-		// The timeout covers the whole exchange with the backend, including
-		// copying its response body to the client.
+		// The timeout covers the whole exchange with the backend, retries
+		// included, and copying its response body to the client.
 		ctx, cancel := context.WithTimeout(r.Context(), backend.Timeout)
 		defer cancel()
 		proxy.ServeHTTP(w, r.WithContext(ctx))
