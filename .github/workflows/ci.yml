@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Formatting is not a matter of taste in Go; gofmt is the format.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race matters: the gateway handles every request on its own goroutine.
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+      - name: build
+        run: go build ./...
+
+  compose:
+    # The tests exercise the handler in-process; this exercises the image the
+    # way it runs: distroless, non-root, health-checked, stopped with SIGTERM.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: compose up
+        run: docker compose up --build --detach --wait
+
+      - name: smoke test over HTTP
+        run: ./scripts/smoke.sh
+
+      - name: logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: compose down
+        if: always()
+        run: docker compose down

@@ -1,0 +1,11 @@
+# Milestone 0: the gateway only. Backends arrive in Milestone 1, Redis in
+# Milestone 3, Prometheus in Milestone 5.
+services:
+  gatekeeper:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

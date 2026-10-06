@@ -1,0 +1,91 @@
+// Command gatekeeper is an HTTP API gateway.
+//
+//	gatekeeper              run the gateway
+//	gatekeeper healthcheck  exit 0 if the local gateway answers /healthz
+//
+// The second form is for the container health check: the image is
+// distroless, with no shell or curl to run one.
+//
+// Configuration comes from the environment:
+//
+//	GATEKEEPER_LISTEN            address to listen on (default ":8080")
+//	GATEKEEPER_SHUTDOWN_TIMEOUT  how long to let requests in flight finish
+//	                             on SIGTERM (default "10s")
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/mghadia1/gatekeeper/internal/server"
+)
+
+// version is set at build time: -ldflags "-X main.version=...".
+var version = "dev"
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "gatekeeper")
+
+	listen := envOr("GATEKEEPER_LISTEN", ":8080")
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := server.Probe(localURL(listen)+"/healthz", 2*time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "unhealthy:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if err := run(listen, logger); err != nil {
+		logger.Error("gatekeeper stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(listen string, logger *slog.Logger) error {
+	shutdownTimeout, err := time.ParseDuration(envOr("GATEKEEPER_SHUTDOWN_TIMEOUT", "10s"))
+	if err != nil {
+		return fmt.Errorf("GATEKEEPER_SHUTDOWN_TIMEOUT: %w", err)
+	}
+
+	// SIGTERM is what `docker stop` sends; SIGINT is Ctrl-C.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	logger.Info("listening", "address", ln.Addr().String(), "version", version)
+	if err := server.Serve(ctx, ln, server.Handler(version), shutdownTimeout); err != nil {
+		return err
+	}
+	logger.Info("shut down cleanly")
+	return nil
+}
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// localURL turns a listen address such as ":8080" or "0.0.0.0:8080" into a
+// URL that reaches it from the same machine.
+func localURL(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	if port == "" {
+		port = strings.TrimPrefix(listen, ":")
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
