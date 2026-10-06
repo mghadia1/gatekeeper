@@ -22,7 +22,7 @@ is doing through metrics.
 | 4 | Resilience: circuit breakers, retries for idempotent requests, body limits | Built; waiting on CI |
 | 5 | Observability: Prometheus metrics, JSON logs | Built; waiting on CI |
 | 6 | Load test: gateway overhead, throughput, rate-limit accuracy under load | Tooling built; no results yet |
-| 7 | Architecture diagram, design decisions, benchmarks | Not started |
+| 7 | Architecture diagram, design decisions, benchmarks | Diagram, decisions and failures written; benchmarks wait on Milestone 6 |
 
 ## Quickstart
 
@@ -86,6 +86,45 @@ a JSON description of what reached it): `users` with two instances, and
 - Unknown fields, unknown backends, non-HTTP URLs, non-positive timeouts and
   conflicting routes all stop the gateway at startup, with the file and the
   problem named.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    client([Clients])
+    gk1["Gatekeeper<br/>replica 1 :8080"]
+    gk2["Gatekeeper<br/>replica 2 :8081"]
+    redis[("Redis<br/>rate-limit buckets")]
+    u1["users-1"]
+    u2["users-2"]
+    orders["orders"]
+    prom["Prometheus"]
+
+    client --> gk1
+    client --> gk2
+    gk1 -- "token bucket (Lua)" --> redis
+    gk2 -- "token bucket (Lua)" --> redis
+    gk1 --> u1
+    gk1 --> u2
+    gk1 --> orders
+    gk2 --> u1
+    gk2 --> u2
+    gk2 --> orders
+    prom -- "scrape :9091" --> gk1
+    prom -- "scrape :9091" --> gk2
+```
+
+Inside one gateway, a request passes through, in order:
+
+```
+request id -> access log + metrics -> router (most specific pattern)
+  -> route label -> rate limiter -> body size limit -> circuit breaker
+  -> pick a healthy instance -> retrying transport -> backend
+```
+
+The replicas share nothing but Redis: each keeps its own view of instance
+health and its own circuit breakers, and only the rate limit, which must be
+one limit per client rather than one per replica, lives in Redis.
 
 ## How a request is handled
 
@@ -304,6 +343,56 @@ python3 bench/run.py      # about 10 minutes
 **Status: no results yet.** A short trial confirmed the runner works, but it
 ran on a laptop that was swapping, so its numbers are not reported. The
 measurement waits for a quiet machine.
+
+## Design decisions
+
+| Decision | Why | Cost, or what would change it |
+|----------|-----|-------------------------------|
+| Routes on Go's `net/http` patterns | Matching and "most specific wins" are the standard library's, documented and tested there | Only what ServeMux patterns can express; no regex routes |
+| Conflicting routes are a startup error | ServeMux panics on them; recovering that panic turns a bad config into a clear message | Relies on recovering a library panic |
+| One shared transport, 256 idle connections per backend | Go's default of 2 makes a busy proxy reconnect for most requests | More open sockets per backend |
+| `X-Request-ID` set as headers go out | A backend that echoes it does not produce two copies | The id is fixed before the backend answers |
+| Liveness only on `/healthz` | Docker restarts on a failed check; that would not fix a backend outage | No readiness endpoint yet |
+| Static binary in distroless, self health check | ~16 MB, no shell; `gatekeeper healthcheck` replaces curl | Debugging inside the container is harder |
+| Round robin over healthy instances; fail open when none is | A wrong health signal should degrade, not refuse everything | With every instance truly down, requests still try them (and get 502) |
+| Active checks plus passive ejection; 503 counts, 500 does not | Checks catch idle failures; real traffic catches them faster; a 500 is about one request | Two mechanisms and their thresholds to tune |
+| Fractional token bucket | A client at exactly the refill rate is never starved | Floating point in the bucket |
+| Redis Lua script on Redis's clock | Atomic across replicas; immune to their clock drift | Every limited request is a Redis round trip |
+| Client = hashed API key, else connection IP | Keys never stored or logged; `X-Forwarded-For` is forgeable | Behind a load balancer every client shares its IP until trusted proxies are configured |
+| Rate limiter fails open, fast | A limiter outage should not become an API outage | During a Redis outage there is no limit (configurable to fail closed) |
+| Retries only when safe, to another instance, within a budget | Hides dead instances without replaying bodies or causing retry storms | Requests with bodies are never retried |
+| Circuit breaker per backend, separate from instance ejection | Whole-backend failure needs a different answer (fail fast) than one bad instance | Another state machine per backend |
+| Metrics on an admin port; route patterns as labels | Internals stay private; series count stays bounded | Two ports to run and protect |
+| Open-loop load generator inside the Compose network | No coordinated omission; no Docker Desktop port forwarding in the numbers | Load generator and gateway share the laptop's CPUs |
+
+## Failures found while building it
+
+Each was caught by a test, `-race`, or reading the code, fixed, and covered
+by a test where one could be written:
+
+1. **A catch-all 404 turned every 405 into a 404.** ServeMux answers 405
+   only when no pattern matches the path; the JSON fallback matched
+   everything. It now asks the router which methods would match.
+   (Milestone 1, a test.)
+2. **A shutdown that could hang.** `main` waited for the health checks in a
+   `defer` that ran before the one cancelling them, so a startup error would
+   have hung the process. It now cancels, then waits. (Milestone 2, found
+   reading the code.)
+3. **A data race in a test.** The health checker wrote log lines into a
+   `bytes.Buffer` that the test was reading; `-race` reported it. Tests now
+   use a locked buffer. (Milestone 2.)
+4. **Failing open took 1.7 s per request.** go-redis retries a failed
+   command 3 times and a dial 5 times by default, so with Redis down every
+   request waited before going through. Retries are off (`-1`, not `0`),
+   with a 1 s store skip and a test bounding each request at 300 ms.
+   (Milestone 3, a test.)
+5. **Every request with a body got 413.** A `Config` built in code had a body
+   limit of 0, taken literally. Zero now means the default. (Milestone 4, an
+   older test.)
+6. **Rate-limited requests were counted as `unmatched`.** The route was
+   recorded inside the proxy handler, which a refused request never reaches,
+   so metrics and logs lost it. Route labels are now applied first.
+   (Milestone 5, a metrics test.)
 
 ## The server itself
 
